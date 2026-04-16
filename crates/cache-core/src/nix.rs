@@ -269,7 +269,7 @@ pub fn encode_nix_base32(input: &[u8]) -> String {
         if i < input.len() {
             c = input[i] >> j;
         }
-        if i + 1 < input.len() {
+        if i + 1 < input.len() && j != 0 {
             c |= input[i + 1] << (8 - j);
         }
 
