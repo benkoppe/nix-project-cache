@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use base64::Engine as _;
 use serde::{Deserialize, Deserializer};
@@ -31,6 +32,73 @@ pub enum PathInfoJsonError {
     },
 }
 
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum StorePathHashError {
+    #[error("invalid store path format (missing hyphen): {0}")]
+    MissingHyphen(String),
+    #[error("invalid hash length {actual} (expected {expected}): {store_path}")]
+    InvalidLength {
+        store_path: String,
+        actual: usize,
+        expected: usize,
+    },
+    #[error("invalid character {character:?} at position {position} in hash: {store_path}")]
+    InvalidCharacter {
+        store_path: String,
+        character: char,
+        position: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StorePathHash(String);
+
+impl StorePathHash {
+    pub const LENGTH: usize = 32;
+
+    pub fn parse_from_store_path(store_path: &str) -> Result<Self, StorePathHashError> {
+        let base = store_path.rsplit('/').next().unwrap_or(store_path);
+
+        let (hash, _) = base
+            .split_once('-')
+            .ok_or_else(|| StorePathHashError::MissingHyphen(store_path.to_owned()))?;
+
+        if hash.len() != Self::LENGTH {
+            return Err(StorePathHashError::InvalidLength {
+                store_path: store_path.to_owned(),
+                actual: hash.len(),
+                expected: Self::LENGTH,
+            });
+        }
+
+        for (position, character) in hash.chars().enumerate() {
+            if !NIX_BASE32_ALPHABET.contains(&(character as u8)) {
+                return Err(StorePathHashError::InvalidCharacter {
+                    store_path: store_path.to_owned(),
+                    character,
+                    position,
+                });
+            }
+        }
+
+        Ok(Self(hash.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for StorePathHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashAlgorithm {
     Sha256,
@@ -57,6 +125,12 @@ impl HashAlgorithm {
 
     pub fn supports_nix_base32_conversion(&self) -> bool {
         matches!(self, Self::Sha256)
+    }
+}
+
+impl fmt::Display for HashAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -143,40 +217,15 @@ impl NixHash {
         match self {
             Self::Raw(raw) => raw.clone(),
             Self::Structured {
-                algorithm,
-                encoding,
-                digest,
-            } => match encoding {
-                Some(HashEncoding::NixBase32) => format!("{}:{digest}", algorithm.as_str()),
-                _ => format!("{}-{digest}", algorithm.as_str()),
-            },
+                algorithm, digest, ..
+            } => format!("{algorithm}-{digest}"),
         }
     }
 
     pub fn to_nix_base32(&self) -> Result<String, NixHashError> {
         match self {
             Self::Raw(raw) => convert_text_hash_to_nix_base32(raw),
-            Self::Structured {
-                algorithm,
-                encoding,
-                digest,
-            } => {
-                if !algorithm.supports_nix_base32_conversion() {
-                    return Err(NixHashError::UnsupportedAlgorithm(
-                        algorithm.as_str().to_owned(),
-                    ));
-                }
-
-                match encoding {
-                    Some(HashEncoding::NixBase32) => Ok(format!("{}:{digest}", algorithm.as_str())),
-                    Some(HashEncoding::Base64) | None => {
-                        convert_supported_base64_digest_to_nix_base32(algorithm, digest)
-                    }
-                    Some(HashEncoding::Other(name)) => {
-                        Err(NixHashError::UnsupportedEncoding(name.clone()))
-                    }
-                }
-            }
+            Self::Structured { .. } => convert_text_hash_to_nix_base32(&self.to_text()),
         }
     }
 }
@@ -244,7 +293,8 @@ impl NixContentAddress {
         match self {
             Self::Raw(raw) => raw.clone(),
             Self::Structured { method, hash } => {
-                let normalized_hash = hash.to_nix_base32().unwrap_or_else(|_| hash.to_text());
+                let hash_text = hash.to_text();
+                let normalized_hash = hash.to_nix_base32().unwrap_or(hash_text);
 
                 match method {
                     ContentAddressMethod::Text => format!("text:{normalized_hash}"),
@@ -267,6 +317,23 @@ pub struct PathInfo {
     pub deriver: Option<String>,
     pub signatures: Vec<String>,
     pub ca: Option<NixContentAddress>,
+}
+
+impl PathInfo {
+    pub fn store_path_hash(&self) -> Result<StorePathHash, StorePathHashError> {
+        StorePathHash::parse_from_store_path(&self.path)
+    }
+
+    pub fn reference_hashes(&self) -> Result<Vec<StorePathHash>, StorePathHashError> {
+        self.references
+            .iter()
+            .map(|reference| StorePathHash::parse_from_store_path(reference))
+            .collect()
+    }
+}
+
+pub fn store_path_hash(store_path: &str) -> Result<StorePathHash, StorePathHashError> {
+    StorePathHash::parse_from_store_path(store_path)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -373,12 +440,12 @@ fn convert_supported_base64_digest_to_nix_base32(
     algorithm: &HashAlgorithm,
     digest: &str,
 ) -> Result<String, NixHashError> {
+    if !algorithm.supports_nix_base32_conversion() {
+        return Err(NixHashError::UnsupportedAlgorithm(algorithm.to_string()));
+    }
+
     let hash_bytes = base64::engine::general_purpose::STANDARD.decode(digest)?;
-    Ok(format!(
-        "{}:{}",
-        algorithm.as_str(),
-        encode_nix_base32(&hash_bytes)
-    ))
+    Ok(format!("{algorithm}:{}", encode_nix_base32(&hash_bytes)))
 }
 
 pub fn encode_nix_base32(input: &[u8]) -> String {
@@ -414,7 +481,7 @@ pub fn convert_text_hash_to_nix_base32(hash: &str) -> Result<String, NixHashErro
 
     if !parsed.algorithm.supports_nix_base32_conversion() {
         return Err(NixHashError::UnsupportedAlgorithm(
-            parsed.algorithm.as_str().to_owned(),
+            parsed.algorithm.to_string(),
         ));
     }
 
@@ -427,7 +494,7 @@ pub fn convert_text_hash_to_nix_base32(hash: &str) -> Result<String, NixHashErro
                 return Err(NixHashError::UnsupportedTextFormat(hash.to_owned()));
             }
 
-            Ok(format!("{}:{}", parsed.algorithm.as_str(), parsed.digest))
+            Ok(format!("{}:{}", parsed.algorithm, parsed.digest))
         }
     }
 }
@@ -466,6 +533,19 @@ mod tests {
         let input = "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz";
         let result = convert_text_hash_to_nix_base32(input).unwrap();
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn parse_text_hash_accepts_colon_form_even_if_not_nix_base32() {
+        let parsed =
+            parse_text_hash("sha256:FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=").unwrap();
+
+        assert_eq!(parsed.algorithm, HashAlgorithm::Sha256);
+        assert_eq!(parsed.form, TextHashForm::ColonSeparated);
+        assert_eq!(
+            parsed.digest,
+            "FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="
+        );
     }
 
     #[test]
@@ -530,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn content_address_structured_text_formats_like_niks3() {
+    fn content_address_structured_text_formats_like_go() {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Text,
             hash: NixHash::Structured {
@@ -544,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn content_address_structured_nar_formats_like_niks3() {
+    fn content_address_structured_nar_formats_like_go() {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Nar,
             hash: NixHash::Structured {
@@ -644,5 +724,107 @@ mod tests {
             "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello"
         );
         assert_eq!(info.nar_hash.algorithm(), Some(HashAlgorithm::Sha256));
+    }
+
+    #[test]
+    fn parse_path_info_json_rejects_empty_input() {
+        let result = parse_path_info_json(b"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_path_info_json_rejects_whitespace_only() {
+        let result = parse_path_info_json(b"   \n\t  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_path_info_json_rejects_invalid_json() {
+        let result = parse_path_info_json(b"not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_path_info_json_accepts_multiple_object_entries() {
+        let json = br#"{
+            "/nix/store/aaaa-foo": {"narHash": "sha256-abc=", "narSize": 100, "references": []},
+            "/nix/store/bbbb-bar": {"narHash": "sha256-def=", "narSize": 200, "references": []}
+        }"#;
+
+        let result = parse_path_info_json(json).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result["/nix/store/aaaa-foo"].path, "/nix/store/aaaa-foo");
+        assert_eq!(result["/nix/store/aaaa-foo"].nar_size, 100);
+        assert_eq!(result["/nix/store/bbbb-bar"].path, "/nix/store/bbbb-bar");
+        assert_eq!(result["/nix/store/bbbb-bar"].nar_size, 200);
+    }
+
+    #[test]
+    fn parse_path_info_json_accepts_multiple_array_entries() {
+        let json = br#"[
+            {"path": "/nix/store/aaaa-foo", "narHash": "sha256-abc=", "narSize": 100, "references": []},
+            {"path": "/nix/store/bbbb-bar", "narHash": "sha256-def=", "narSize": 200, "references": []}
+        ]"#;
+
+        let result = parse_path_info_json(json).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result["/nix/store/aaaa-foo"].path, "/nix/store/aaaa-foo");
+        assert_eq!(result["/nix/store/aaaa-foo"].nar_size, 100);
+        assert_eq!(result["/nix/store/bbbb-bar"].path, "/nix/store/bbbb-bar");
+        assert_eq!(result["/nix/store/bbbb-bar"].nar_size, 200);
+    }
+
+    #[test]
+    fn parse_path_info_json_accepts_null_ca() {
+        let json = br#"{
+            "/nix/store/aaaa-foo": {
+                "narHash": "sha256-abc=",
+                "narSize": 100,
+                "references": [],
+                "ca": null
+            }
+        }"#;
+
+        let result = parse_path_info_json(json).unwrap();
+
+        assert!(result["/nix/store/aaaa-foo"].ca.is_none());
+    }
+
+    #[test]
+    fn store_path_hash_parses_valid_store_path() {
+        let hash = StorePathHash::parse_from_store_path(
+            "/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2",
+        )
+        .unwrap();
+
+        assert_eq!(hash.as_str(), "8ha1dhmx807czjczmwy078s4r9s254il");
+    }
+
+    #[test]
+    fn store_path_hash_rejects_missing_hyphen() {
+        let result = StorePathHash::parse_from_store_path("/nix/store/badhash");
+        assert!(matches!(result, Err(StorePathHashError::MissingHyphen(_))));
+    }
+
+    #[test]
+    fn store_path_hash_rejects_invalid_characters() {
+        let result = StorePathHash::parse_from_store_path(
+            "/nix/store/8ha1dhmx807czjczmwy078s4r9s254ie-package",
+        );
+        assert!(matches!(
+            result,
+            Err(StorePathHashError::InvalidCharacter { .. })
+        ));
+    }
+
+    #[test]
+    fn store_path_hash_rejects_wrong_length() {
+        let result = StorePathHash::parse_from_store_path("/nix/store/tooshort-package");
+        assert!(matches!(
+            result,
+            Err(StorePathHashError::InvalidLength { .. })
+        ));
     }
 }
