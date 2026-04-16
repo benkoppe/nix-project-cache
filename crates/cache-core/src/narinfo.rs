@@ -63,18 +63,15 @@ impl NarInfo {
         writeln!(&mut out, "NarSize: {}", self.nar_size).unwrap();
 
         out.push_str("References:");
-
-        let mut sorted_refs = self.sorted_references();
-        sorted_refs.sort_unstable();
-        for reference in sorted_refs {
+        let refs = self.sorted_references();
+        if refs.is_empty() {
             out.push(' ');
-            out.push_str(trim_store_prefix(reference));
+        } else {
+            for reference in refs {
+                out.push(' ');
+                out.push_str(trim_store_prefix(reference));
+            }
         }
-
-        if self.references.is_empty() {
-            out.push(' ');
-        }
-
         out.push('\n');
 
         if let Some(deriver) = &self.deriver {
@@ -252,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn render_structured_nix32_hash_matches_go_stringification_path() {
+    fn render_structured_nix32_hash_uses_direct_nix32_rendering() {
         let mut narinfo = sample_narinfo();
         narinfo.nar_hash = NixHash::Structured {
             algorithm: HashAlgorithm::Sha256,
@@ -266,6 +263,18 @@ mod tests {
             rendered
                 .contains("NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz\n")
         );
+    }
+
+    #[test]
+    fn render_with_signatures_sorts_supplied_signatures() {
+        let narinfo = sample_narinfo();
+        let rendered = narinfo
+            .render_with_signatures(&["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()])
+            .unwrap();
+
+        let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
+        let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
+        assert!(a_pos < b_pos);
     }
 
     #[test]
