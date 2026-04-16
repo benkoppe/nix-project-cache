@@ -10,8 +10,10 @@ const NIX_BASE32_ALPHABET: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 pub enum NixHashError {
     #[error("unsupported hash format: {0} (expected sha256-... or sha256:...)")]
     UnsupportedHashFormat(String),
-    #[error("unsupported structured hash format: {0}")]
-    UnsupportedStructuredFormat(String),
+    #[error("unsupported hash algorithm for nix-base32 conversion: {0}")]
+    UnsupportedAlgorithm(String),
+    #[error("unsupported hash encoding for nix-base32 conversion: {0}")]
+    UnsupportedEncoding(String),
     #[error("failed to decode base64 hash: {0}")]
     InvalidBase64(#[from] base64::DecodeError),
 }
@@ -28,16 +30,33 @@ pub enum PathInfoJsonError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Hash {
+pub enum HashEncoding {
+    Base64,
+    NixBase32,
+    Other(String),
+}
+
+impl HashEncoding {
+    fn parse(value: &str) -> Self {
+        match value {
+            "base64" => Self::Base64,
+            "nix32" | "base32" => Self::NixBase32,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NixHash {
     Raw(String),
     Structured {
         algorithm: String,
-        format: Option<String>,
-        hash: String,
+        encoding: Option<HashEncoding>,
+        digest: String,
     },
 }
 
-impl<'de> Deserialize<'de> for Hash {
+impl<'de> Deserialize<'de> for NixHash {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -45,8 +64,8 @@ impl<'de> Deserialize<'de> for Hash {
         #[derive(Deserialize)]
         struct StructuredHash {
             algorithm: String,
-            #[serde(default)]
-            format: Option<String>,
+            #[serde(default, rename = "format")]
+            format_name: Option<String>,
             hash: String,
         }
         #[derive(Deserialize)]
@@ -59,14 +78,14 @@ impl<'de> Deserialize<'de> for Hash {
             HashRepr::Raw(raw) => Ok(Self::Raw(raw)),
             HashRepr::Structured(value) => Ok(Self::Structured {
                 algorithm: value.algorithm,
-                format: value.format,
-                hash: value.hash,
+                encoding: value.format_name.as_deref().map(HashEncoding::parse),
+                digest: value.hash,
             }),
         }
     }
 }
 
-impl Hash {
+impl NixHash {
     pub fn algorithm(&self) -> Option<&str> {
         match self {
             Self::Raw(raw) => {
@@ -82,45 +101,77 @@ impl Hash {
         }
     }
 
-    pub fn to_input_string(&self) -> String {
+    pub fn to_text(&self) -> String {
         match self {
             Self::Raw(raw) => raw.clone(),
             Self::Structured {
                 algorithm,
-                format,
-                hash,
-            } => match format.as_deref() {
-                Some("nix32") | Some("base32") => format!("{algorithm}:{hash}"),
-                _ => format!("{algorithm}-{hash}"),
+                encoding,
+                digest,
+            } => match encoding {
+                Some(HashEncoding::NixBase32) => format!("{algorithm}:{digest}"),
+                _ => format!("{algorithm}-{digest}"),
             },
         }
     }
 
-    pub fn to_nix32_string(&self) -> Result<String, NixHashError> {
+    pub fn to_nix_base32(&self) -> Result<String, NixHashError> {
         match self {
-            Self::Raw(raw) => convert_hash_to_nix32(raw),
+            Self::Raw(raw) => convert_text_hash_to_nix_base32(raw),
             Self::Structured {
                 algorithm,
-                format,
-                hash,
-            } => match format.as_deref() {
-                Some("nix32") | Some("base32") => Ok(format!("{algorithm}:{hash}")),
-                Some("base64") | Some("sri") | None => {
-                    convert_hash_to_nix32(&format!("{algorithm}-{hash}"))
+                encoding,
+                digest,
+            } => {
+                if algorithm != "sha256" {
+                    return Err(NixHashError::UnsupportedAlgorithm(algorithm.clone()));
                 }
-                Some(other) => Err(NixHashError::UnsupportedStructuredFormat(other.to_owned())),
-            },
+
+                match encoding {
+                    Some(HashEncoding::NixBase32) => Ok(format!("sha256:{digest}")),
+                    Some(HashEncoding::Base64) | None => {
+                        convert_text_hash_to_nix_base32(&format!("sha256-{digest}"))
+                    }
+                    Some(HashEncoding::Other(name)) => {
+                        Err(NixHashError::UnsupportedEncoding(name.clone()))
+                    }
+                }
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContentAddress {
-    Raw(String),
-    Structured { method: String, hash: Hash },
+pub enum ContentAddressMethod {
+    Text,
+    Flat,
+    Nar,
+    Git,
+    Other(String),
 }
 
-impl<'de> Deserialize<'de> for ContentAddress {
+impl ContentAddressMethod {
+    fn parse(value: &str) -> Self {
+        match value {
+            "text" => Self::Text,
+            "flat" => Self::Flat,
+            "nar" => Self::Nar,
+            "git" => Self::Git,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NixContentAddress {
+    Raw(String),
+    Structured {
+        method: ContentAddressMethod,
+        hash: NixHash,
+    },
+}
+
+impl<'de> Deserialize<'de> for NixContentAddress {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -128,7 +179,7 @@ impl<'de> Deserialize<'de> for ContentAddress {
         #[derive(Deserialize)]
         struct StructuredContentAddress {
             method: String,
-            hash: Hash,
+            hash: NixHash,
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -139,30 +190,27 @@ impl<'de> Deserialize<'de> for ContentAddress {
         match ContentAddressRepr::deserialize(deserializer)? {
             ContentAddressRepr::Raw(raw) => Ok(Self::Raw(raw)),
             ContentAddressRepr::Structured(value) => Ok(Self::Structured {
-                method: value.method,
+                method: ContentAddressMethod::parse(&value.method),
                 hash: value.hash,
             }),
         }
     }
 }
 
-impl ContentAddress {
-    pub fn to_narinfo_string(&self) -> Result<String, NixHashError> {
+impl NixContentAddress {
+    pub fn render_for_narinfo(&self) -> String {
         match self {
-            Self::Raw(raw) => Ok(raw.clone()),
+            Self::Raw(raw) => raw.clone(),
             Self::Structured { method, hash } => {
-                let nix32_hash = hash.to_nix32_string()?;
-                let prefix = match method.as_str() {
-                    "text" => "text:",
-                    "flat" => "fixed:",
-                    "nar" => "fixed:r:",
-                    "git" => "fixed:git:",
-                    other => {
-                        return Ok(format!("{other}:{nix32_hash}"));
-                    }
-                };
+                let normalized_hash = hash.to_nix_base32().unwrap_or_else(|_| hash.to_text());
 
-                Ok(format!("{prefix}{nix32_hash}"))
+                match method {
+                    ContentAddressMethod::Text => format!("text:{normalized_hash}"),
+                    ContentAddressMethod::Flat => format!("fixed:{normalized_hash}"),
+                    ContentAddressMethod::Nar => format!("fixed:r:{normalized_hash}"),
+                    ContentAddressMethod::Git => format!("fixed:git:{normalized_hash}"),
+                    ContentAddressMethod::Other(other) => format!("{other}:{normalized_hash}"),
+                }
             }
         }
     }
@@ -171,18 +219,18 @@ impl ContentAddress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathInfo {
     pub path: String,
-    pub nar_hash: Hash,
+    pub nar_hash: NixHash,
     pub nar_size: u64,
     pub references: Vec<String>,
     pub deriver: Option<String>,
     pub signatures: Vec<String>,
-    pub ca: Option<ContentAddress>,
+    pub ca: Option<NixContentAddress>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct PathInfoPayload {
     #[serde(rename = "narHash")]
-    nar_hash: Hash,
+    nar_hash: NixHash,
     #[serde(rename = "narSize")]
     nar_size: u64,
     #[serde(default)]
@@ -192,7 +240,7 @@ struct PathInfoPayload {
     #[serde(default)]
     signatures: Vec<String>,
     #[serde(default)]
-    ca: Option<ContentAddress>,
+    ca: Option<NixContentAddress>,
 }
 
 impl PathInfoPayload {
@@ -279,7 +327,7 @@ pub fn encode_nix_base32(input: &[u8]) -> String {
     result
 }
 
-pub fn convert_hash_to_nix32(hash: &str) -> Result<String, NixHashError> {
+pub fn convert_text_hash_to_nix_base32(hash: &str) -> Result<String, NixHashError> {
     if hash.starts_with("sha256:")
         && !hash.contains('-')
         && !hash.contains('+')
@@ -300,43 +348,156 @@ pub fn convert_hash_to_nix32(hash: &str) -> Result<String, NixHashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn encode_nix_base32_matches_go_test_vector() {
         let input = hex::decode("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
             .unwrap();
+
         let result = encode_nix_base32(&input);
+
         assert_eq!(
             result,
             "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
         );
     }
+
     #[test]
-    fn convert_hash_to_nix32_accepts_sri() {
+    fn convert_text_hash_to_nix_base32_accepts_sri() {
         let result =
-            convert_hash_to_nix32("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=").unwrap();
+            convert_text_hash_to_nix_base32("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=")
+                .unwrap();
+
         assert_eq!(
             result,
             "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
         );
     }
+
     #[test]
-    fn convert_hash_to_nix32_accepts_existing_nix32() {
+    fn convert_text_hash_to_nix_base32_accepts_existing_nix32() {
         let input = "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz";
-        let result = convert_hash_to_nix32(input).unwrap();
+        let result = convert_text_hash_to_nix_base32(input).unwrap();
         assert_eq!(result, input);
     }
+
     #[test]
-    fn content_address_formats_nar_method() {
-        let ca = ContentAddress::Structured {
-            method: "nar".to_owned(),
-            hash: Hash::Raw("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned()),
-        };
-        let result = ca.to_narinfo_string().unwrap();
+    fn nix_hash_raw_sha256_sri_round_trips() {
+        let hash: NixHash =
+            serde_json::from_str(r#""sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=""#)
+                .unwrap();
+
         assert_eq!(
-            result,
-            "fixed:r:sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+            hash.to_text(),
+            "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="
         );
     }
+
+    #[test]
+    fn nix_hash_raw_sha256_colon_round_trips() {
+        let hash: NixHash =
+            serde_json::from_str(r#""sha256:FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=""#)
+                .unwrap();
+
+        assert_eq!(
+            hash.to_text(),
+            "sha256:FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="
+        );
+    }
+
+    #[test]
+    fn nix_hash_structured_sha256_base64_to_text() {
+        let hash: NixHash = serde_json::from_str(
+            r#"{"algorithm":"sha256","format":"base64","hash":"FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            hash.to_text(),
+            "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc="
+        );
+    }
+
+    #[test]
+    fn nix_hash_structured_sha512_base64_to_text() {
+        let hash: NixHash = serde_json::from_str(
+            r#"{"algorithm":"sha512","format":"base64","hash":"abcdef123456"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(hash.to_text(), "sha512-abcdef123456");
+    }
+
+    #[test]
+    fn content_address_raw_text_round_trips() {
+        let ca: NixContentAddress = serde_json::from_str(r#""text:sha256:1abc2def3ghi""#).unwrap();
+
+        assert_eq!(ca.render_for_narinfo(), "text:sha256:1abc2def3ghi");
+    }
+
+    #[test]
+    fn content_address_raw_fixed_recursive_round_trips() {
+        let ca: NixContentAddress = serde_json::from_str(r#""fixed:r:sha256:1abc2def""#).unwrap();
+
+        assert_eq!(ca.render_for_narinfo(), "fixed:r:sha256:1abc2def");
+    }
+
+    #[test]
+    fn content_address_structured_text_formats_like_niks3() {
+        let ca = NixContentAddress::Structured {
+            method: ContentAddressMethod::Text,
+            hash: NixHash::Structured {
+                algorithm: "sha256".to_owned(),
+                encoding: Some(HashEncoding::Base64),
+                digest: "h1JyyIYA".to_owned(),
+            },
+        };
+
+        assert_eq!(ca.render_for_narinfo(), "text:sha256:00hv474ll7");
+    }
+
+    #[test]
+    fn content_address_structured_nar_formats_like_niks3() {
+        let ca = NixContentAddress::Structured {
+            method: ContentAddressMethod::Nar,
+            hash: NixHash::Structured {
+                algorithm: "sha256".to_owned(),
+                encoding: Some(HashEncoding::Base64),
+                digest: "abcd1234".to_owned(),
+            },
+        };
+
+        assert_eq!(ca.render_for_narinfo(), "fixed:r:sha256:7qdpbivdv9");
+    }
+
+    #[test]
+    fn content_address_structured_unknown_method_falls_back() {
+        let ca = NixContentAddress::Structured {
+            method: ContentAddressMethod::Other("weird".to_owned()),
+            hash: NixHash::Structured {
+                algorithm: "sha256".to_owned(),
+                encoding: Some(HashEncoding::Base64),
+                digest: "h1JyyIYA".to_owned(),
+            },
+        };
+
+        assert_eq!(ca.render_for_narinfo(), "weird:sha256:00hv474ll7");
+    }
+
+    #[test]
+    fn content_address_structured_sha512_falls_back_to_text_form() {
+        let ca = NixContentAddress::Structured {
+            method: ContentAddressMethod::Text,
+            hash: NixHash::Structured {
+                algorithm: "sha512".to_owned(),
+                encoding: Some(HashEncoding::Base64),
+                digest: "abcdef".to_owned(),
+            },
+        };
+
+        assert_eq!(ca.render_for_narinfo(), "text:sha512-abcdef");
+    }
+
     #[test]
     fn parse_path_info_json_accepts_object_form() {
         let json = br#"{
@@ -355,10 +516,12 @@ mod tests {
                 }
             }
         }"#;
+
         let result = parse_path_info_json(json).unwrap();
         let info = result
             .get("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello")
             .unwrap();
+
         assert_eq!(
             info.path,
             "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello"
@@ -367,6 +530,7 @@ mod tests {
         assert_eq!(info.references.len(), 1);
         assert!(info.ca.is_some());
     }
+
     #[test]
     fn parse_path_info_json_accepts_array_form() {
         let json = br#"[
@@ -382,10 +546,12 @@ mod tests {
                 "signatures": []
             }
         ]"#;
+
         let result = parse_path_info_json(json).unwrap();
         let info = result
             .get("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello")
             .unwrap();
+
         assert_eq!(
             info.path,
             "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello"
