@@ -429,11 +429,8 @@ pub fn parse_text_hash(input: &str) -> Option<ParsedTextHash<'_>> {
     None
 }
 
-fn is_plausible_nix_base32_digest(digest: &str) -> bool {
-    !digest.is_empty()
-        && digest
-            .bytes()
-            .all(|byte| NIX_BASE32_ALPHABET.contains(&byte))
+fn is_compat_nix_base32_digest(digest: &str) -> bool {
+    !digest.contains('-') && !digest.contains('+') && !digest.contains('/') && !digest.contains('=')
 }
 
 fn convert_supported_base64_digest_to_nix_base32(
@@ -490,7 +487,7 @@ pub fn convert_text_hash_to_nix_base32(hash: &str) -> Result<String, NixHashErro
             convert_supported_base64_digest_to_nix_base32(&parsed.algorithm, parsed.digest)
         }
         TextHashForm::ColonSeparated => {
-            if !is_plausible_nix_base32_digest(parsed.digest) {
+            if !is_compat_nix_base32_digest(parsed.digest) {
                 return Err(NixHashError::UnsupportedTextFormat(hash.to_owned()));
             }
 
@@ -826,5 +823,56 @@ mod tests {
             result,
             Err(StorePathHashError::InvalidLength { .. })
         ));
+    }
+
+    #[test]
+    fn convert_text_hash_to_nix_base32_rejects_invalid_format() {
+        let result = convert_text_hash_to_nix_base32("md5:abc123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_path_info_json_preserves_deriver_and_signatures_in_object_form() {
+        let json = br#"{
+            "/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2": {
+                "narHash": "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=",
+                "narSize": 226560,
+                "references": [
+                    "/nix/store/3n58xw4373jp0ljirf06d8077j15pc4j-glibc-2.37-8",
+                    "/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2"
+                ],
+                "deriver": "/nix/store/abc-hello.drv",
+                "signatures": ["cache.nixos.org-1:sig"]
+            }
+        }"#;
+
+        let result = parse_path_info_json(json).unwrap();
+        let info = &result["/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2"];
+
+        assert_eq!(info.deriver.as_deref(), Some("/nix/store/abc-hello.drv"));
+        assert_eq!(info.signatures, vec!["cache.nixos.org-1:sig"]);
+    }
+
+    #[test]
+    fn parse_path_info_json_preserves_deriver_and_signatures_in_array_form() {
+        let json = br#"[
+            {
+                "path": "/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2",
+                "narHash": "sha256-FePFYIlMuycIXPZbWi7LGEiMmZSX9FMbaQenWBzm1Sc=",
+                "narSize": 226560,
+                "references": [
+                    "/nix/store/3n58xw4373jp0ljirf06d8077j15pc4j-glibc-2.37-8",
+                    "/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2"
+                ],
+                "deriver": "/nix/store/abc-hello.drv",
+                "signatures": ["cache.nixos.org-1:sig"]
+            }
+        ]"#;
+
+        let result = parse_path_info_json(json).unwrap();
+        let info = &result["/nix/store/8ha1dhmx807czjczmwy078s4r9s254il-hello-2.12.2"];
+
+        assert_eq!(info.deriver.as_deref(), Some("/nix/store/abc-hello.drv"));
+        assert_eq!(info.signatures, vec!["cache.nixos.org-1:sig"]);
     }
 }
