@@ -15,6 +15,10 @@ name = "cache-auth"
 version = "0.1.0"
 
 [[package]]
+name = "cache-core"
+version = "0.1.0"
+
+[[package]]
 name = "cache-db"
 version = "0.1.0"
 

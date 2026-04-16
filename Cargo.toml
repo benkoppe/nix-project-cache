@@ -3,7 +3,7 @@ resolver = "3"
 members = [
   "crates/cache-api",
   "crates/cache-app",
-  "crates/cache-auth",
+  "crates/cache-auth", "crates/cache-core",
   "crates/cache-db",
   "crates/cache-ingest",
   "crates/cache-read",
