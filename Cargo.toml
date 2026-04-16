@@ -1,2 +1,11 @@
 [workspace]
 resolver = "3"
+members = [
+  "crates/cache-api",
+  "crates/cache-app",
+  "crates/cache-auth",
+  "crates/cache-db",
+  "crates/cache-ingest",
+  "crates/cache-read",
+  "crates/cache-store",
+]
