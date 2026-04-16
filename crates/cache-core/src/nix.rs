@@ -230,6 +230,26 @@ impl NixHash {
     }
 }
 
+pub fn parse_hash_text(input: &str) -> Option<ParsedHashText<'_>> {
+    if let Some((algorithm, digest)) = input.split_once(':') {
+        return Some(ParsedHashText {
+            algorithm: HashAlgorithm::parse(algorithm),
+            form: HashTextSyntax::ColonSeparated,
+            digest,
+        });
+    }
+
+    if let Some((algorithm, digest)) = input.split_once('-') {
+        return Some(ParsedHashText {
+            algorithm: HashAlgorithm::parse(algorithm),
+            form: HashTextSyntax::Sri,
+            digest,
+        });
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentAddressMethod {
     Text,
@@ -407,26 +427,6 @@ pub fn parse_path_info_json(input: &[u8]) -> Result<BTreeMap<String, PathInfo>, 
             }),
         },
     }
-}
-
-pub fn parse_hash_text(input: &str) -> Option<ParsedHashText<'_>> {
-    if let Some((algorithm, digest)) = input.split_once(':') {
-        return Some(ParsedHashText {
-            algorithm: HashAlgorithm::parse(algorithm),
-            form: HashTextSyntax::ColonSeparated,
-            digest,
-        });
-    }
-
-    if let Some((algorithm, digest)) = input.split_once('-') {
-        return Some(ParsedHashText {
-            algorithm: HashAlgorithm::parse(algorithm),
-            form: HashTextSyntax::Sri,
-            digest,
-        });
-    }
-
-    None
 }
 
 fn is_compat_nix32_text_digest(digest: &str) -> bool {

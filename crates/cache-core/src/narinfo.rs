@@ -19,11 +19,11 @@ pub struct NarInfo {
 
 impl NarInfo {
     pub fn nar_hash_nix32(&self) -> Result<String, NixHashError> {
-        self.nar_hash.to_nix_base32()
+        self.nar_hash.render_nix32_text()
     }
 
     pub fn ca_narinfo_string(&self) -> Option<String> {
-        self.ca.as_ref().map(NixContentAddress::render_for_narinfo)
+        self.ca.as_ref().map(NixContentAddress::format_for_narinfo)
     }
 
     pub fn sorted_references(&self) -> Vec<&str> {
