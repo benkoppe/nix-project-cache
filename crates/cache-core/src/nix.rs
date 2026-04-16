@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use base64::Engine as _;
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
 const NIX_BASE32_ALPHABET: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
@@ -26,7 +27,7 @@ pub enum PathInfoJsonError {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hash {
     Raw(String),
     Structured {
@@ -34,6 +35,35 @@ pub enum Hash {
         format: Option<String>,
         hash: String,
     },
+}
+
+impl<'de> Deserialize<'de> for Hash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct StructuredHash {
+            algorithm: String,
+            #[serde(default)]
+            format: Option<String>,
+            hash: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum HashRepr {
+            Raw(String),
+            Structured(StructuredHash),
+        }
+        match HashRepr::deserialize(deserializer)? {
+            HashRepr::Raw(raw) => Ok(Self::Raw(raw)),
+            HashRepr::Structured(value) => Ok(Self::Structured {
+                algorithm: value.algorithm,
+                format: value.format,
+                hash: value.hash,
+            }),
+        }
+    }
 }
 
 impl Hash {
@@ -84,10 +114,36 @@ impl Hash {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentAddress {
     Raw(String),
     Structured { method: String, hash: Hash },
+}
+
+impl<'de> Deserialize<'de> for ContentAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct StructuredContentAddress {
+            method: String,
+            hash: Hash,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ContentAddressRepr {
+            Raw(String),
+            Structured(StructuredContentAddress),
+        }
+        match ContentAddressRepr::deserialize(deserializer)? {
+            ContentAddressRepr::Raw(raw) => Ok(Self::Raw(raw)),
+            ContentAddressRepr::Structured(value) => Ok(Self::Structured {
+                method: value.method,
+                hash: value.hash,
+            }),
+        }
+    }
 }
 
 impl ContentAddress {
