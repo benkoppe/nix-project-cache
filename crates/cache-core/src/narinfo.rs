@@ -47,6 +47,10 @@ impl NarInfo {
     }
 
     pub fn render(&self) -> Result<String, NixHashError> {
+        self.render_with_signatures(&self.signatures)
+    }
+
+    pub fn render_with_signatures(&self, signatures: &[String]) -> Result<String, NixHashError> {
         let nar_hash = self.nar_hash_nix32()?;
         let ca = self.ca_narinfo_string();
 
@@ -59,23 +63,31 @@ impl NarInfo {
         writeln!(&mut out, "NarSize: {}", self.nar_size).unwrap();
 
         out.push_str("References:");
-        let refs = self.sorted_references();
-        if refs.is_empty() {
+
+        let mut sorted_refs = self.sorted_references();
+        sorted_refs.sort_unstable();
+        for reference in sorted_refs {
             out.push(' ');
-        } else {
-            for reference in refs {
-                out.push(' ');
-                out.push_str(trim_store_prefix(reference));
-            }
+            out.push_str(trim_store_prefix(reference));
         }
+
+        if self.references.is_empty() {
+            out.push(' ');
+        }
+
         out.push('\n');
 
         if let Some(deriver) = &self.deriver {
             writeln!(&mut out, "Deriver: {}", trim_store_prefix(deriver)).unwrap();
         }
 
-        for signature in self.sorted_signatures() {
-            writeln!(&mut out, "Sig: {}", signature).unwrap();
+        if !signatures.is_empty() {
+            let mut sorted_sigs = signatures.iter().map(String::as_str).collect::<Vec<_>>();
+            sorted_sigs.sort_unstable();
+
+            for signature in sorted_sigs {
+                writeln!(&mut out, "Sig: {}", signature).unwrap();
+            }
         }
 
         if let Some(ca) = ca {
@@ -84,16 +96,42 @@ impl NarInfo {
 
         Ok(out)
     }
+
+    pub fn compress(&self) -> Result<Vec<u8>, NarInfoCompressionError> {
+        let rendered = self.render()?;
+        compress_narinfo(&rendered)
+    }
+
+    pub fn compress_with_signatures(
+        &self,
+        signatures: &[String],
+    ) -> Result<Vec<u8>, NarInfoCompressionError> {
+        let rendered = self.render_with_signatures(signatures)?;
+        compress_narinfo(&rendered)
+    }
 }
 
 fn trim_store_prefix(path: &str) -> &str {
     path.strip_prefix(NIX_STORE_PREFIX).unwrap_or(path)
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum NarInfoCompressionError {
+    #[error("failed to render narinfo: {0}")]
+    Render(#[from] NixHashError),
+    #[error("failed to compress narinfo: {0}")]
+    Compress(#[from] std::io::Error),
+}
+
+pub fn compress_narinfo(content: &str) -> Result<Vec<u8>, NarInfoCompressionError> {
+    Ok(zstd::stream::encode_all(content.as_bytes(), 0)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nix::{ContentAddressMethod, NixContentAddress};
+    use crate::nix::{ContentAddressMethod, HashAlgorithm, HashTextEncoding, NixContentAddress};
+
     fn sample_narinfo() -> NarInfo {
         NarInfo {
             store_path: "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1".to_owned(),
@@ -109,10 +147,12 @@ mod tests {
             ca: None,
         }
     }
+
     #[test]
     fn render_formats_basic_fields() {
         let narinfo = sample_narinfo();
         let rendered = narinfo.render().unwrap();
+
         assert!(
             rendered
                 .contains("StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1\n")
@@ -129,6 +169,7 @@ mod tests {
         );
         assert!(rendered.contains("NarSize: 226560\n"));
     }
+
     #[test]
     fn render_sorts_references_and_strips_store_prefix() {
         let mut narinfo = sample_narinfo();
@@ -137,31 +178,54 @@ mod tests {
             "/nix/store/aaa-package".to_owned(),
             "/nix/store/mmm-package".to_owned(),
         ];
+
         let rendered = narinfo.render().unwrap();
+
         assert!(rendered.contains("References: aaa-package mmm-package zzz-package\n"));
     }
+
     #[test]
     fn render_keeps_trailing_space_for_empty_references() {
         let narinfo = sample_narinfo();
         let rendered = narinfo.render().unwrap();
+
         assert!(rendered.contains("References: \n"));
     }
+
     #[test]
     fn render_strips_store_prefix_from_deriver() {
         let mut narinfo = sample_narinfo();
         narinfo.deriver = Some("/nix/store/abcdefghijklmnopqrstuvwx-source.drv".to_owned());
+
         let rendered = narinfo.render().unwrap();
+
         assert!(rendered.contains("Deriver: abcdefghijklmnopqrstuvwx-source.drv\n"));
     }
+
     #[test]
-    fn render_sorts_signatures() {
+    fn render_sorts_embedded_signatures() {
         let mut narinfo = sample_narinfo();
         narinfo.signatures = vec!["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()];
+
         let rendered = narinfo.render().unwrap();
+
         let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
         let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
         assert!(a_pos < b_pos);
     }
+
+    #[test]
+    fn render_with_signatures_uses_passed_signatures() {
+        let narinfo = sample_narinfo();
+        let rendered = narinfo
+            .render_with_signatures(&["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()])
+            .unwrap();
+
+        let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
+        let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
+        assert!(a_pos < b_pos);
+    }
+
     #[test]
     fn render_includes_ca_field() {
         let mut narinfo = sample_narinfo();
@@ -169,11 +233,46 @@ mod tests {
             method: ContentAddressMethod::Nar,
             hash: NixHash::Raw("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned()),
         });
+
         let rendered = narinfo.render().unwrap();
+
         assert!(
             rendered.contains(
                 "CA: fixed:r:sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz\n"
             )
         );
+    }
+
+    #[test]
+    fn render_omits_sig_lines_when_no_signatures_are_present() {
+        let narinfo = sample_narinfo();
+        let rendered = narinfo.render().unwrap();
+
+        assert!(!rendered.contains("\nSig: "));
+    }
+
+    #[test]
+    fn render_structured_nix32_hash_matches_go_stringification_path() {
+        let mut narinfo = sample_narinfo();
+        narinfo.nar_hash = NixHash::Structured {
+            algorithm: HashAlgorithm::Sha256,
+            encoding: Some(HashTextEncoding::NixBase32),
+            digest: "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz".to_owned(),
+        };
+
+        let rendered = narinfo.render().unwrap();
+
+        assert!(
+            rendered
+                .contains("NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz\n")
+        );
+    }
+
+    #[test]
+    fn compress_narinfo_produces_non_empty_output() {
+        let narinfo = sample_narinfo();
+        let compressed = narinfo.compress().unwrap();
+
+        assert!(!compressed.is_empty());
     }
 }
