@@ -8,8 +8,10 @@ const NIX_BASE32_ALPHABET: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 #[derive(Debug, Error)]
 pub enum NixHashError {
-    #[error("unsupported hash format: {0} (expected sha256-... or sha256:...)")]
-    UnsupportedHashFormat(String),
+    #[error(
+        "unsupported hash text format: {0} (expected <algorithm>-<digest> or <algorithm>:<digest>)"
+    )]
+    UnsupportedTextFormat(String),
     #[error("unsupported hash algorithm for nix-base32 conversion: {0}")]
     UnsupportedAlgorithm(String),
     #[error("unsupported hash encoding for nix-base32 conversion: {0}")]
@@ -30,6 +32,35 @@ pub enum PathInfoJsonError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HashAlgorithm {
+    Sha256,
+    Sha512,
+    Other(String),
+}
+
+impl HashAlgorithm {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "sha256" => Self::Sha256,
+            "sha512" => Self::Sha512,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Sha256 => "sha256",
+            Self::Sha512 => "sha512",
+            Self::Other(other) => other,
+        }
+    }
+
+    pub fn supports_nix_base32_conversion(&self) -> bool {
+        matches!(self, Self::Sha256)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashEncoding {
     Base64,
     NixBase32,
@@ -46,11 +77,24 @@ impl HashEncoding {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextHashForm {
+    Sri,
+    ColonSeparated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedTextHash<'a> {
+    pub algorithm: HashAlgorithm,
+    pub form: TextHashForm,
+    pub digest: &'a str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NixHash {
     Raw(String),
     Structured {
-        algorithm: String,
+        algorithm: HashAlgorithm,
         encoding: Option<HashEncoding>,
         digest: String,
     },
@@ -68,16 +112,18 @@ impl<'de> Deserialize<'de> for NixHash {
             format_name: Option<String>,
             hash: String,
         }
+
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum HashRepr {
             Raw(String),
             Structured(StructuredHash),
         }
+
         match HashRepr::deserialize(deserializer)? {
             HashRepr::Raw(raw) => Ok(Self::Raw(raw)),
             HashRepr::Structured(value) => Ok(Self::Structured {
-                algorithm: value.algorithm,
+                algorithm: HashAlgorithm::parse(&value.algorithm),
                 encoding: value.format_name.as_deref().map(HashEncoding::parse),
                 digest: value.hash,
             }),
@@ -86,18 +132,10 @@ impl<'de> Deserialize<'de> for NixHash {
 }
 
 impl NixHash {
-    pub fn algorithm(&self) -> Option<&str> {
+    pub fn algorithm(&self) -> Option<HashAlgorithm> {
         match self {
-            Self::Raw(raw) => {
-                if let Some((algorithm, _)) = raw.split_once(':') {
-                    Some(algorithm)
-                } else if let Some((algorithm, _)) = raw.split_once('-') {
-                    Some(algorithm)
-                } else {
-                    None
-                }
-            }
-            Self::Structured { algorithm, .. } => Some(algorithm.as_str()),
+            Self::Raw(raw) => parse_text_hash(raw).map(|parsed| parsed.algorithm),
+            Self::Structured { algorithm, .. } => Some(algorithm.clone()),
         }
     }
 
@@ -109,8 +147,8 @@ impl NixHash {
                 encoding,
                 digest,
             } => match encoding {
-                Some(HashEncoding::NixBase32) => format!("{algorithm}:{digest}"),
-                _ => format!("{algorithm}-{digest}"),
+                Some(HashEncoding::NixBase32) => format!("{}:{digest}", algorithm.as_str()),
+                _ => format!("{}-{digest}", algorithm.as_str()),
             },
         }
     }
@@ -123,14 +161,16 @@ impl NixHash {
                 encoding,
                 digest,
             } => {
-                if algorithm != "sha256" {
-                    return Err(NixHashError::UnsupportedAlgorithm(algorithm.clone()));
+                if !algorithm.supports_nix_base32_conversion() {
+                    return Err(NixHashError::UnsupportedAlgorithm(
+                        algorithm.as_str().to_owned(),
+                    ));
                 }
 
                 match encoding {
-                    Some(HashEncoding::NixBase32) => Ok(format!("sha256:{digest}")),
+                    Some(HashEncoding::NixBase32) => Ok(format!("{}:{digest}", algorithm.as_str())),
                     Some(HashEncoding::Base64) | None => {
-                        convert_text_hash_to_nix_base32(&format!("sha256-{digest}"))
+                        convert_supported_base64_digest_to_nix_base32(algorithm, digest)
                     }
                     Some(HashEncoding::Other(name)) => {
                         Err(NixHashError::UnsupportedEncoding(name.clone()))
@@ -181,12 +221,14 @@ impl<'de> Deserialize<'de> for NixContentAddress {
             method: String,
             hash: NixHash,
         }
+
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum ContentAddressRepr {
             Raw(String),
             Structured(StructuredContentAddress),
         }
+
         match ContentAddressRepr::deserialize(deserializer)? {
             ContentAddressRepr::Raw(raw) => Ok(Self::Raw(raw)),
             ContentAddressRepr::Structured(value) => Ok(Self::Structured {
@@ -300,6 +342,45 @@ pub fn parse_path_info_json(input: &[u8]) -> Result<BTreeMap<String, PathInfo>, 
     }
 }
 
+pub fn parse_text_hash(input: &str) -> Option<ParsedTextHash<'_>> {
+    if let Some((algorithm, digest)) = input.split_once(':') {
+        return Some(ParsedTextHash {
+            algorithm: HashAlgorithm::parse(algorithm),
+            form: TextHashForm::ColonSeparated,
+            digest,
+        });
+    }
+
+    if let Some((algorithm, digest)) = input.split_once('-') {
+        return Some(ParsedTextHash {
+            algorithm: HashAlgorithm::parse(algorithm),
+            form: TextHashForm::Sri,
+            digest,
+        });
+    }
+
+    None
+}
+
+fn is_plausible_nix_base32_digest(digest: &str) -> bool {
+    !digest.is_empty()
+        && digest
+            .bytes()
+            .all(|byte| NIX_BASE32_ALPHABET.contains(&byte))
+}
+
+fn convert_supported_base64_digest_to_nix_base32(
+    algorithm: &HashAlgorithm,
+    digest: &str,
+) -> Result<String, NixHashError> {
+    let hash_bytes = base64::engine::general_purpose::STANDARD.decode(digest)?;
+    Ok(format!(
+        "{}:{}",
+        algorithm.as_str(),
+        encode_nix_base32(&hash_bytes)
+    ))
+}
+
 pub fn encode_nix_base32(input: &[u8]) -> String {
     if input.is_empty() {
         return String::new();
@@ -328,21 +409,27 @@ pub fn encode_nix_base32(input: &[u8]) -> String {
 }
 
 pub fn convert_text_hash_to_nix_base32(hash: &str) -> Result<String, NixHashError> {
-    if hash.starts_with("sha256:")
-        && !hash.contains('-')
-        && !hash.contains('+')
-        && !hash.contains('/')
-        && !hash.contains('=')
-    {
-        return Ok(hash.to_owned());
+    let parsed = parse_text_hash(hash)
+        .ok_or_else(|| NixHashError::UnsupportedTextFormat(hash.to_owned()))?;
+
+    if !parsed.algorithm.supports_nix_base32_conversion() {
+        return Err(NixHashError::UnsupportedAlgorithm(
+            parsed.algorithm.as_str().to_owned(),
+        ));
     }
 
-    let base64_hash = hash
-        .strip_prefix("sha256-")
-        .ok_or_else(|| NixHashError::UnsupportedHashFormat(hash.to_owned()))?;
+    match parsed.form {
+        TextHashForm::Sri => {
+            convert_supported_base64_digest_to_nix_base32(&parsed.algorithm, parsed.digest)
+        }
+        TextHashForm::ColonSeparated => {
+            if !is_plausible_nix_base32_digest(parsed.digest) {
+                return Err(NixHashError::UnsupportedTextFormat(hash.to_owned()));
+            }
 
-    let hash_bytes = base64::engine::general_purpose::STANDARD.decode(base64_hash)?;
-    Ok(format!("sha256:{}", encode_nix_base32(&hash_bytes)))
+            Ok(format!("{}:{}", parsed.algorithm.as_str(), parsed.digest))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -447,7 +534,7 @@ mod tests {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Text,
             hash: NixHash::Structured {
-                algorithm: "sha256".to_owned(),
+                algorithm: HashAlgorithm::Sha256,
                 encoding: Some(HashEncoding::Base64),
                 digest: "h1JyyIYA".to_owned(),
             },
@@ -461,7 +548,7 @@ mod tests {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Nar,
             hash: NixHash::Structured {
-                algorithm: "sha256".to_owned(),
+                algorithm: HashAlgorithm::Sha256,
                 encoding: Some(HashEncoding::Base64),
                 digest: "abcd1234".to_owned(),
             },
@@ -475,7 +562,7 @@ mod tests {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Other("weird".to_owned()),
             hash: NixHash::Structured {
-                algorithm: "sha256".to_owned(),
+                algorithm: HashAlgorithm::Sha256,
                 encoding: Some(HashEncoding::Base64),
                 digest: "h1JyyIYA".to_owned(),
             },
@@ -489,7 +576,7 @@ mod tests {
         let ca = NixContentAddress::Structured {
             method: ContentAddressMethod::Text,
             hash: NixHash::Structured {
-                algorithm: "sha512".to_owned(),
+                algorithm: HashAlgorithm::Sha512,
                 encoding: Some(HashEncoding::Base64),
                 digest: "abcdef".to_owned(),
             },
@@ -556,6 +643,6 @@ mod tests {
             info.path,
             "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello"
         );
-        assert_eq!(info.nar_hash.algorithm(), Some("sha256"));
+        assert_eq!(info.nar_hash.algorithm(), Some(HashAlgorithm::Sha256));
     }
 }
