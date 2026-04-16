@@ -481,13 +481,13 @@ fn validate_nix32_text_digest(algorithm: &HashAlgorithm, digest: &str) -> Result
             digest: digest.to_owned(),
         });
     }
-    if let Some(expected_len) = algorithm.expected_nix_base32_len() {
-        if digest.len() != expected_len {
-            return Err(NixHashError::InvalidNixBase32Digest {
-                algorithm: algorithm.to_string(),
-                digest: digest.to_owned(),
-            });
-        }
+    if let Some(expected_len) = algorithm.expected_nix_base32_len()
+        && digest.len() != expected_len
+    {
+        return Err(NixHashError::InvalidNixBase32Digest {
+            algorithm: algorithm.to_string(),
+            digest: digest.to_owned(),
+        });
     }
     Ok(())
 }
