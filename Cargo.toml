@@ -16,7 +16,7 @@ axum = { version = "0.8", features = ["http1", "tokio"] }
 async-trait = "0.1"
 http-body-util = "0.1"
 reqwest = { version = "0.13", default-features = false, features = [
-  "rustls-tls",
+  "rustls",
   "http2",
 ] }
 tower = { version = "0.5", features = ["util"] }
@@ -30,6 +30,7 @@ thiserror = "2"
 uuid = { version = "1", features = ["serde", "v7"] }
 base64 = "0.22"
 hex = "0.4"
+bytes = "1.11"
 zstd = "0.13"
 regex = "1.12"
 time = { version = "0.3", features = [
