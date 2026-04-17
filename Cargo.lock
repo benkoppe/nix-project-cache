@@ -199,12 +199,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bytes",
  "cache-core",
  "cache-store",
  "http-body-util",
  "tokio",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
