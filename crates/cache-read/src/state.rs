@@ -1,29 +1,17 @@
 use std::sync::Arc;
 
-use cache_core::narinfo::NarInfoRenderer;
-use cache_core::signing::NarInfoSigner;
-
-use crate::resolver::NarInfoResolver;
+use crate::service::ReadService;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub resolver: Arc<dyn NarInfoResolver>,
-    pub renderer: NarInfoRenderer,
-    pub signer: NarInfoSigner,
+    pub read_service: Arc<ReadService>,
     pub priority: u32,
 }
 
 impl AppState {
-    pub fn new(
-        resolver: Arc<dyn NarInfoResolver>,
-        renderer: NarInfoRenderer,
-        signer: NarInfoSigner,
-        priority: u32,
-    ) -> Self {
+    pub fn new(read_service: Arc<ReadService>, priority: u32) -> Self {
         Self {
-            resolver,
-            renderer,
-            signer,
+            read_service,
             priority,
         }
     }
@@ -31,7 +19,7 @@ impl AppState {
     pub fn nix_cache_info_text(&self) -> String {
         format!(
             "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
-            self.renderer.store_dir(),
+            self.read_service.store_dir(),
             self.priority
         )
     }

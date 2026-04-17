@@ -15,3 +15,5 @@ tracing.workspace = true
 [dev-dependencies]
 http-body-util.workspace = true
 tower.workspace = true
+bytes.workspace = true
+uuid.workspace = true
