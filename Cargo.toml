@@ -22,6 +22,7 @@ uuid = { version = "1", features = ["serde", "v7"] }
 base64 = "0.22"
 hex = "0.4"
 zstd = "0.13"
+regex = "1.12"
 time = { version = "0.3", features = [
   "serde",
   "formatting",
