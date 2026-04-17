@@ -176,7 +176,7 @@ impl fmt::Display for StorePathHash {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HashAlgorithm {
     Sha256,
     Sha512,
@@ -204,17 +204,108 @@ impl HashAlgorithm {
         matches!(self, Self::Sha256)
     }
 
-    pub fn expected_nix_base32_len(&self) -> Option<usize> {
+    pub fn nix_base32_digest_len(&self) -> Option<usize> {
         match self {
             Self::Sha256 => Some(52),
             Self::Sha512 | Self::Other(_) => None,
         }
+    }
+
+    pub fn prefixed_nix_base32_text_len(&self) -> Option<usize> {
+        self.nix_base32_digest_len()
+            .map(|digest_len| self.as_str().len() + 1 + digest_len)
     }
 }
 
 impl fmt::Display for HashAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NormalizedNarHash {
+    algorithm: HashAlgorithm,
+    digest: String,
+}
+
+impl NormalizedNarHash {
+    pub fn new(algorithm: HashAlgorithm, digest: impl Into<String>) -> Result<Self, NixHashError> {
+        let digest = digest.into();
+        validate_nix32_text_digest(&algorithm, &digest)?;
+
+        Ok(Self { algorithm, digest })
+    }
+
+    pub fn parse_text(input: &str) -> Result<Self, NixHashError> {
+        let parsed = parse_hash_text(input)
+            .ok_or_else(|| NixHashError::UnsupportedTextFormat(input.to_owned()))?;
+
+        match parsed.form {
+            HashTextSyntax::Sri => Self::from_base64_digest(parsed.algorithm, parsed.digest),
+            HashTextSyntax::ColonSeparated => Self::new(parsed.algorithm, parsed.digest),
+        }
+    }
+
+    pub fn from_nix_hash(hash: &NixHash) -> Result<Self, NixHashError> {
+        match hash {
+            NixHash::Raw(raw) => Self::parse_text(raw),
+            NixHash::Structured {
+                algorithm,
+                encoding: Some(HashTextEncoding::NixBase32),
+                digest,
+            } => Self::new(algorithm.clone(), digest.clone()),
+            NixHash::Structured {
+                algorithm,
+                encoding: Some(HashTextEncoding::Base64),
+                digest,
+            }
+            | NixHash::Structured {
+                algorithm,
+                encoding: None,
+                digest,
+            } => Self::from_base64_digest(algorithm.clone(), digest),
+            NixHash::Structured {
+                encoding: Some(HashTextEncoding::Other(name)),
+                ..
+            } => Err(NixHashError::UnsupportedEncoding(name.clone())),
+        }
+    }
+
+    fn from_base64_digest(algorithm: HashAlgorithm, digest: &str) -> Result<Self, NixHashError> {
+        if !algorithm.supports_nix_base32_conversion() {
+            return Err(NixHashError::UnsupportedAlgorithm(algorithm.to_string()));
+        }
+
+        let hash_bytes = base64::engine::general_purpose::STANDARD.decode(digest)?;
+        let normalized_digest = encode_nix_base32(&hash_bytes);
+
+        Ok(Self {
+            algorithm,
+            digest: normalized_digest,
+        })
+    }
+
+    pub fn algorithm(&self) -> &HashAlgorithm {
+        &self.algorithm
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub fn digest_len(&self) -> usize {
+        self.digest.len()
+    }
+
+    pub fn text_len(&self) -> usize {
+        self.algorithm.as_str().len() + 1 + self.digest.len()
+    }
+}
+
+impl fmt::Display for NormalizedNarHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.algorithm, self.digest)
     }
 }
 
@@ -236,13 +327,13 @@ impl HashTextEncoding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HashTextSyntax {
+enum HashTextSyntax {
     Sri,
     ColonSeparated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedHashText<'a> {
+struct ParsedHashText<'a> {
     pub algorithm: HashAlgorithm,
     pub form: HashTextSyntax,
     pub digest: &'a str,
@@ -311,36 +402,12 @@ impl NixHash {
         }
     }
 
-    pub fn render_nix32_text(&self) -> Result<String, NixHashError> {
-        match self {
-            Self::Raw(raw) => normalize_hash_text_to_nix32(raw),
-            Self::Structured {
-                algorithm,
-                encoding: Some(HashTextEncoding::NixBase32),
-                digest,
-            } => {
-                validate_nix32_text_digest(algorithm, digest)?;
-                Ok(format!("{algorithm}:{digest}"))
-            }
-            Self::Structured {
-                algorithm,
-                encoding: Some(HashTextEncoding::Base64),
-                digest,
-            }
-            | Self::Structured {
-                algorithm,
-                encoding: None,
-                digest,
-            } => encode_base64_digest_as_nix32_text(algorithm, digest),
-            Self::Structured {
-                encoding: Some(HashTextEncoding::Other(name)),
-                ..
-            } => Err(NixHashError::UnsupportedEncoding(name.clone())),
-        }
+    pub fn normalize(&self) -> Result<NormalizedNarHash, NixHashError> {
+        NormalizedNarHash::from_nix_hash(self)
     }
 }
 
-pub fn parse_hash_text(input: &str) -> Option<ParsedHashText<'_>> {
+fn parse_hash_text(input: &str) -> Option<ParsedHashText<'_>> {
     if let Some((algorithm, digest)) = input.split_once(':') {
         return Some(ParsedHashText {
             algorithm: HashAlgorithm::parse(algorithm),
@@ -424,7 +491,10 @@ impl NixContentAddress {
             Self::Raw(raw) => raw.clone(),
             Self::Structured { method, hash } => {
                 let hash_text = hash.render_text();
-                let normalized_hash = hash.render_nix32_text().unwrap_or(hash_text);
+                let normalized_hash = hash
+                    .normalize()
+                    .map(|hash| hash.to_string())
+                    .unwrap_or(hash_text);
 
                 match method {
                     ContentAddressMethod::Text => format!("text:{normalized_hash}"),
@@ -460,10 +530,6 @@ impl PathInfo {
             .map(|reference| StorePathHash::parse_from_store_path(reference))
             .collect()
     }
-}
-
-pub fn parse_store_path_hash(store_path: &str) -> Result<StorePathHash, StorePathHashError> {
-    StorePathHash::parse_from_store_path(store_path)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -556,7 +622,7 @@ fn validate_nix32_text_digest(algorithm: &HashAlgorithm, digest: &str) -> Result
             digest: digest.to_owned(),
         });
     }
-    if let Some(expected_len) = algorithm.expected_nix_base32_len()
+    if let Some(expected_len) = algorithm.nix_base32_digest_len()
         && digest.len() != expected_len
     {
         return Err(NixHashError::InvalidNixBase32Digest {
@@ -567,19 +633,7 @@ fn validate_nix32_text_digest(algorithm: &HashAlgorithm, digest: &str) -> Result
     Ok(())
 }
 
-fn encode_base64_digest_as_nix32_text(
-    algorithm: &HashAlgorithm,
-    digest: &str,
-) -> Result<String, NixHashError> {
-    if !algorithm.supports_nix_base32_conversion() {
-        return Err(NixHashError::UnsupportedAlgorithm(algorithm.to_string()));
-    }
-
-    let hash_bytes = base64::engine::general_purpose::STANDARD.decode(digest)?;
-    Ok(format!("{algorithm}:{}", encode_nix_base32(&hash_bytes)))
-}
-
-pub fn encode_nix_base32(input: &[u8]) -> String {
+fn encode_nix_base32(input: &[u8]) -> String {
     if input.is_empty() {
         return String::new();
     }
@@ -606,25 +660,6 @@ pub fn encode_nix_base32(input: &[u8]) -> String {
     result
 }
 
-pub fn normalize_hash_text_to_nix32(hash: &str) -> Result<String, NixHashError> {
-    let parsed = parse_hash_text(hash)
-        .ok_or_else(|| NixHashError::UnsupportedTextFormat(hash.to_owned()))?;
-
-    if !parsed.algorithm.supports_nix_base32_conversion() {
-        return Err(NixHashError::UnsupportedAlgorithm(
-            parsed.algorithm.to_string(),
-        ));
-    }
-
-    match parsed.form {
-        HashTextSyntax::Sri => encode_base64_digest_as_nix32_text(&parsed.algorithm, parsed.digest),
-        HashTextSyntax::ColonSeparated => {
-            validate_nix32_text_digest(&parsed.algorithm, parsed.digest)?;
-            Ok(format!("{}:{}", parsed.algorithm, parsed.digest))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,8 +680,9 @@ mod tests {
     #[test]
     fn convert_text_hash_to_nix_base32_accepts_sri() {
         let result =
-            normalize_hash_text_to_nix32("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=")
-                .unwrap();
+            NormalizedNarHash::parse_text("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=")
+                .unwrap()
+                .to_string();
 
         assert_eq!(
             result,
@@ -657,7 +693,7 @@ mod tests {
     #[test]
     fn convert_text_hash_to_nix_base32_accepts_existing_nix32() {
         let input = "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz";
-        let result = normalize_hash_text_to_nix32(input).unwrap();
+        let result = NormalizedNarHash::parse_text(input).unwrap().to_string();
         assert_eq!(result, input);
     }
 
@@ -955,8 +991,8 @@ mod tests {
     }
 
     #[test]
-    fn convert_text_hash_to_nix_base32_rejects_invalid_format() {
-        let result = normalize_hash_text_to_nix32("md5:abc123");
+    fn normalized_nar_hash_rejects_invalid_format() {
+        let result = NormalizedNarHash::parse_text("md5:abc123");
         assert!(result.is_err());
     }
 
@@ -1006,36 +1042,29 @@ mod tests {
     }
 
     #[test]
-    fn nix_hash_structured_nix32_renders_text_with_colon() {
+    fn nix_hash_structured_nix32_normalizes_directly() {
         let hash = NixHash::Structured {
             algorithm: HashAlgorithm::Sha256,
             encoding: Some(HashTextEncoding::NixBase32),
             digest: "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz".to_owned(),
         };
 
+        let normalized = hash.normalize().unwrap();
+
+        assert_eq!(normalized.algorithm(), &HashAlgorithm::Sha256);
         assert_eq!(
-            hash.render_text(),
+            normalized.digest(),
+            "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+        assert_eq!(
+            normalized.to_string(),
             "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
         );
     }
 
     #[test]
-    fn nix_hash_structured_nix32_renders_nix32_text_directly() {
-        let hash = NixHash::Structured {
-            algorithm: HashAlgorithm::Sha256,
-            encoding: Some(HashTextEncoding::NixBase32),
-            digest: "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz".to_owned(),
-        };
-
-        assert_eq!(
-            hash.render_nix32_text().unwrap(),
-            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
-        );
-    }
-
-    #[test]
-    fn normalize_hash_text_to_nix32_rejects_invalid_nix32_alphabet() {
-        let result = normalize_hash_text_to_nix32(
+    fn normalize_nar_hash_rejects_invalid_nix32_alphabet() {
+        let result = NormalizedNarHash::parse_text(
             "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11le",
         );
 
@@ -1046,8 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn normalize_hash_text_to_nix32_rejects_wrong_nix32_length() {
-        let result = normalize_hash_text_to_nix32("sha256:short");
+    fn normalized_nar_hash_rejects_wrong_nix32_length() {
+        let result = NormalizedNarHash::parse_text("sha256:short");
 
         assert!(matches!(
             result,
@@ -1096,5 +1125,87 @@ mod tests {
             store_dir.display_path("/other/store/abc-hello"),
             "/other/store/abc-hello"
         );
+    }
+
+    #[test]
+    fn normalized_nar_hash_parses_sha256_sri_text() {
+        let hash =
+            NormalizedNarHash::parse_text("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=")
+                .unwrap();
+
+        assert_eq!(hash.algorithm(), &HashAlgorithm::Sha256);
+        assert_eq!(
+            hash.digest(),
+            "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+        assert_eq!(
+            hash.to_string(),
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+    }
+
+    #[test]
+    fn normalized_nar_hash_parses_sha256_nix32_text() {
+        let hash = NormalizedNarHash::parse_text(
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz",
+        )
+        .unwrap();
+
+        assert_eq!(hash.algorithm(), &HashAlgorithm::Sha256);
+        assert_eq!(
+            hash.digest(),
+            "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+    }
+
+    #[test]
+    fn normalized_nar_hash_from_structured_nix_hash_base64() {
+        let hash = NixHash::Structured {
+            algorithm: HashAlgorithm::Sha256,
+            encoding: Some(HashTextEncoding::Base64),
+            digest: "n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned(),
+        };
+
+        let normalized = hash.normalize().unwrap();
+
+        assert_eq!(
+            normalized.to_string(),
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+    }
+
+    #[test]
+    fn normalized_nar_hash_from_structured_nix_hash_nix32() {
+        let hash = NixHash::Structured {
+            algorithm: HashAlgorithm::Sha256,
+            encoding: Some(HashTextEncoding::NixBase32),
+            digest: "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz".to_owned(),
+        };
+
+        let normalized = hash.normalize().unwrap();
+
+        assert_eq!(
+            normalized.to_string(),
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
+    }
+
+    #[test]
+    fn normalized_nar_hash_rejects_non_sha256_algorithm() {
+        let result = NormalizedNarHash::parse_text("sha512:abcdef");
+
+        assert!(matches!(result, Err(NixHashError::UnsupportedAlgorithm(_))));
+    }
+
+    #[test]
+    fn normalized_nar_hash_rejects_invalid_nix32_digest() {
+        let result = NormalizedNarHash::parse_text(
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11le",
+        );
+
+        assert!(matches!(
+            result,
+            Err(NixHashError::InvalidNixBase32Digest { .. })
+        ));
     }
 }
