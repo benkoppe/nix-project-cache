@@ -20,4 +20,8 @@ impl ProjectSlug {
         }
         Ok(Self(input.to_owned()))
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
