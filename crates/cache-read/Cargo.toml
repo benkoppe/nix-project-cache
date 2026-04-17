@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cache-core = { path = "../cache-core" }
+cache-store = { path = "../cache-store" }
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true

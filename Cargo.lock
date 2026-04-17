@@ -186,6 +186,9 @@ dependencies = [
 [[package]]
 name = "cache-store"
 version = "0.1.0"
+dependencies = [
+ "cache-core",
+]
 
 [[package]]
 name = "cc"
