@@ -7,8 +7,6 @@ use thiserror::Error;
 use crate::narinfo::NarInfo;
 use crate::nix::{NixHashError, StoreDir};
 
-const EXPECTED_NAR_HASH_TEXT_LEN: usize = 59;
-
 #[derive(Debug, Error)]
 pub enum ParseSigningKeyError {
     #[error("sign key does not contain a ':'")]
@@ -29,12 +27,6 @@ pub enum FingerprintError {
     InvalidStorePath { store_dir: String, path: String },
     #[error("failed to normalize NAR hash: {0}")]
     InvalidNarHash(#[from] NixHashError),
-    #[error("NAR hash must start with 'sha256:'")]
-    InvalidNarHashPrefix,
-    #[error("NAR hash has invalid length: expected {expected}, got {got}",
-        expected = EXPECTED_NAR_HASH_TEXT_LEN,
-        got = .0)]
-    InvalidNarHashLength(usize),
     #[error("reference path is not inside configured store dir {store_dir}: {path}")]
     InvalidReferencePath { store_dir: String, path: String },
 }
@@ -155,12 +147,6 @@ impl NarInfoSigner {
         }
 
         let nar_hash = narinfo.nar_hash_nix32()?;
-        if !nar_hash.starts_with("sha256:") {
-            return Err(FingerprintError::InvalidNarHashPrefix);
-        }
-        if nar_hash.len() != EXPECTED_NAR_HASH_TEXT_LEN {
-            return Err(FingerprintError::InvalidNarHashLength(nar_hash.len()));
-        }
 
         for reference in &narinfo.references {
             if !self.store_dir.contains_path(reference) {
