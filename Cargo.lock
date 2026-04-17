@@ -88,6 +88,9 @@ version = "0.1.0"
 [[package]]
 name = "cache-read"
 version = "0.1.0"
+dependencies = [
+ "cache-core",
+]
 
 [[package]]
 name = "cache-store"
