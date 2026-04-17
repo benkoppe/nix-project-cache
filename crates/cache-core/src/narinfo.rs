@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::nix::{NixContentAddress, NixHash, NixHashError, StoreDir};
+use crate::nix::{NixContentAddress, NixHash, NixHashError, NormalizedNarHash, StoreDir};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NarInfo {
@@ -16,8 +16,8 @@ pub struct NarInfo {
 }
 
 impl NarInfo {
-    pub fn nar_hash_nix32(&self) -> Result<String, NixHashError> {
-        self.nar_hash.render_nix32_text()
+    pub fn normalized_nar_hash(&self) -> Result<NormalizedNarHash, NixHashError> {
+        self.nar_hash.normalize()
     }
 
     pub fn ca_narinfo_string(&self) -> Option<String> {
@@ -68,7 +68,7 @@ impl NarInfoRenderer {
         narinfo: &NarInfo,
         signatures: &[String],
     ) -> Result<String, NixHashError> {
-        let nar_hash = narinfo.nar_hash_nix32()?;
+        let nar_hash = narinfo.normalized_nar_hash()?;
         let ca = narinfo.ca_narinfo_string();
 
         let mut out = String::new();
@@ -139,7 +139,7 @@ pub enum NarInfoCompressionError {
     Compress(#[from] std::io::Error),
 }
 
-pub fn compress_narinfo(content: &str) -> Result<Vec<u8>, NarInfoCompressionError> {
+fn compress_narinfo(content: &str) -> Result<Vec<u8>, NarInfoCompressionError> {
     Ok(zstd::stream::encode_all(content.as_bytes(), 0)?)
 }
 
@@ -327,5 +327,18 @@ mod tests {
 
         assert!(rendered.contains("References: aaa-package\n"));
         assert!(rendered.contains("Deriver: example.drv\n"));
+    }
+
+    #[test]
+    fn normalized_nar_hash_returns_typed_normalized_value() {
+        let narinfo = sample_narinfo();
+
+        let nar_hash = narinfo.normalized_nar_hash().unwrap();
+
+        assert_eq!(nar_hash.algorithm(), &HashAlgorithm::Sha256);
+        assert_eq!(
+            nar_hash.to_string(),
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
     }
 }
