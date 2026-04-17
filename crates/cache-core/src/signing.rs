@@ -146,7 +146,7 @@ impl NarInfoSigner {
             });
         }
 
-        let nar_hash = narinfo.nar_hash_nix32()?;
+        let nar_hash = narinfo.normalized_nar_hash()?;
 
         for reference in &narinfo.references {
             if !self.store_dir.contains_path(reference) {
@@ -164,7 +164,7 @@ impl NarInfoSigner {
         fingerprint.push_str("1;");
         fingerprint.push_str(&narinfo.store_path);
         fingerprint.push(';');
-        fingerprint.push_str(&nar_hash);
+        write!(&mut fingerprint, "{nar_hash}").unwrap();
         fingerprint.push(';');
         write!(&mut fingerprint, "{}", narinfo.nar_size).unwrap();
         fingerprint.push(';');
@@ -685,11 +685,16 @@ mod tests {
     }
 
     #[test]
-    fn nar_hash_nix32_returns_normalized_sha256_text() {
+    fn normalized_nar_hash_returns_normalized_sha256_text() {
         let narinfo = sample_narinfo();
-        let nar_hash = narinfo.nar_hash_nix32().unwrap();
+        let nar_hash = narinfo.normalized_nar_hash().unwrap();
 
-        assert!(nar_hash.starts_with("sha256:"));
-        assert_eq!(nar_hash.len(), 59);
+        assert_eq!(nar_hash.algorithm(), &HashAlgorithm::Sha256);
+        assert_eq!(nar_hash.digest().len(), 52);
+        assert_eq!(nar_hash.text_len(), 59);
+        assert_eq!(
+            nar_hash.to_string(),
+            "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
+        );
     }
 }
