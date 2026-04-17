@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cache-core = { path = "../cache-core" }
+cache-store = { path = "../cache-store" }
+anyhow.workspace = true
+async-trait.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+uuid.workspace = true
