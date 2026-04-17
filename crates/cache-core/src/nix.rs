@@ -113,6 +113,14 @@ impl StoreDir {
     pub fn display_path<'a>(&self, path: &'a str) -> &'a str {
         self.relative_path(path).unwrap_or(path)
     }
+
+    pub fn expand_display_path(&self, value: &str) -> String {
+        if self.contains_path(value) {
+            value.to_owned()
+        } else {
+            format!("{}/{}", self.as_str(), value.trim_start_matches('/'))
+        }
+    }
 }
 
 impl Default for StoreDir {

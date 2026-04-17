@@ -15,6 +15,133 @@ pub struct NarInfo {
     pub ca: Option<NixContentAddress>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ParseNarInfoError {
+    #[error("invalid narinfo line: {0}")]
+    InvalidLine(String),
+    #[error("duplicate narinfo field: {0}")]
+    DuplicateField(&'static str),
+    #[error("missing narinfo field: {0}")]
+    MissingField(&'static str),
+    #[error("invalid NarSize value: {0}")]
+    InvalidNarSize(String),
+}
+
+pub fn parse_narinfo(input: &str, store_dir: &StoreDir) -> Result<NarInfo, ParseNarInfoError> {
+    let mut store_path = None;
+    let mut url = None;
+    let mut compression = None;
+    let mut nar_hash = None;
+    let mut nar_size = None;
+    let mut references = None;
+    let mut deriver = None;
+    let mut signatures = Vec::new();
+    let mut ca = None;
+
+    for raw_line in input.lines() {
+        if raw_line.is_empty() {
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("StorePath: ") {
+            set_once(&mut store_path, value.to_owned(), "StorePath")?;
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("URL: ") {
+            set_once(&mut url, value.to_owned(), "URL")?;
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("Compression: ") {
+            set_once(&mut compression, value.to_owned(), "Compression")?;
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("NarHash: ") {
+            set_once(&mut nar_hash, NixHash::Raw(value.to_owned()), "NarHash")?;
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("NarSize: ") {
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| ParseNarInfoError::InvalidNarSize(value.to_owned()))?;
+            set_once(&mut nar_size, parsed, "NarSize")?;
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("References:") {
+            if references.is_some() {
+                return Err(ParseNarInfoError::DuplicateField("References"));
+            }
+
+            let parsed = if value.trim().is_empty() {
+                Vec::new()
+            } else {
+                value
+                    .split_whitespace()
+                    .map(|reference| store_dir.expand_display_path(reference))
+                    .collect()
+            };
+
+            references = Some(parsed);
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("Deriver: ") {
+            if deriver.is_some() {
+                return Err(ParseNarInfoError::DuplicateField("Deriver"));
+            }
+
+            deriver = Some(store_dir.expand_display_path(value));
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("Sig: ") {
+            signatures.push(value.to_owned());
+            continue;
+        }
+
+        if let Some(value) = raw_line.strip_prefix("CA: ") {
+            set_once(&mut ca, NixContentAddress::Raw(value.to_owned()), "CA")?;
+            continue;
+        }
+
+        // Ignore unknown fields like FileHash/FileSize from upstream caches.
+        if raw_line.contains(':') {
+            continue;
+        }
+
+        return Err(ParseNarInfoError::InvalidLine(raw_line.to_owned()));
+    }
+
+    Ok(NarInfo {
+        store_path: store_path.ok_or(ParseNarInfoError::MissingField("StorePath"))?,
+        url: url.ok_or(ParseNarInfoError::MissingField("URL"))?,
+        compression: compression.ok_or(ParseNarInfoError::MissingField("Compression"))?,
+        nar_hash: nar_hash.ok_or(ParseNarInfoError::MissingField("NarHash"))?,
+        nar_size: nar_size.ok_or(ParseNarInfoError::MissingField("NarSize"))?,
+        references: references.ok_or(ParseNarInfoError::MissingField("References"))?,
+        deriver,
+        signatures,
+        ca,
+    })
+}
+
+fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    field_name: &'static str,
+) -> Result<(), ParseNarInfoError> {
+    if slot.is_some() {
+        return Err(ParseNarInfoError::DuplicateField(field_name));
+    }
+
+    *slot = Some(value);
+    Ok(())
+}
+
 impl NarInfo {
     pub fn normalized_nar_hash(&self) -> Result<NormalizedNarHash, NixHashError> {
         self.nar_hash.normalize()
@@ -340,5 +467,115 @@ mod tests {
             nar_hash.to_string(),
             "sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz"
         );
+    }
+
+    #[test]
+    fn parse_narinfo_parses_minimal_valid_document() {
+        let input = "\
+StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1
+URL: nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst
+Compression: zstd
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 226560
+References: 
+";
+
+        let parsed = parse_narinfo(input, &StoreDir::default()).unwrap();
+
+        assert_eq!(
+            parsed.store_path,
+            "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1"
+        );
+        assert_eq!(
+            parsed.url,
+            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst"
+        );
+        assert_eq!(parsed.compression, "zstd");
+        assert!(parsed.references.is_empty());
+    }
+
+    #[test]
+    fn parse_narinfo_expands_relative_store_entries() {
+        let input = "\
+StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1
+URL: nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst
+Compression: zstd
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 226560
+References: aaa-package bbb-package
+Deriver: source.drv
+";
+
+        let parsed = parse_narinfo(input, &StoreDir::default()).unwrap();
+
+        assert_eq!(
+            parsed.references,
+            vec![
+                "/nix/store/aaa-package".to_owned(),
+                "/nix/store/bbb-package".to_owned(),
+            ]
+        );
+        assert_eq!(parsed.deriver.as_deref(), Some("/nix/store/source.drv"));
+    }
+
+    #[test]
+    fn parse_narinfo_preserves_signatures_and_ca() {
+        let input = "\
+StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1
+URL: nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst
+Compression: zstd
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 226560
+References: 
+Sig: cache-a:aaaa
+Sig: cache-b:bbbb
+CA: fixed:r:sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+";
+
+        let parsed = parse_narinfo(input, &StoreDir::default()).unwrap();
+
+        assert_eq!(
+            parsed.signatures,
+            vec!["cache-a:aaaa".to_owned(), "cache-b:bbbb".to_owned()]
+        );
+        assert!(matches!(parsed.ca, Some(NixContentAddress::Raw(_))));
+    }
+
+    #[test]
+    fn parse_narinfo_ignores_unknown_fields_from_upstream() {
+        let input = "\
+StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1
+URL: nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst
+Compression: zstd
+FileHash: sha256:ignored
+FileSize: 1234
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 226560
+References: 
+";
+
+        let parsed = parse_narinfo(input, &StoreDir::default()).unwrap();
+
+        assert_eq!(parsed.nar_size, 226560);
+    }
+
+    #[test]
+    fn parse_narinfo_rejects_duplicate_singleton_field() {
+        let input = "\
+StorePath: /nix/store/one
+StorePath: /nix/store/two
+URL: nar/test.nar.zst
+Compression: zstd
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 1
+References: 
+";
+
+        let result = parse_narinfo(input, &StoreDir::default());
+
+        assert!(matches!(
+            result,
+            Err(ParseNarInfoError::DuplicateField("StorePath"))
+        ));
     }
 }
