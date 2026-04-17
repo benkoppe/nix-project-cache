@@ -8,11 +8,11 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
         .route("/nix-cache-info", get(handlers::aggregate_cache_info))
-        .route("/:object", get(handlers::aggregate_object))
+        .route("/{object}", get(handlers::aggregate_object))
         .route(
-            "/p/:project/nix-cache-info",
+            "/p/{project}/nix-cache-info",
             get(handlers::project_cache_info),
         )
-        .route("/p/:project/:object", get(handlers::project_object))
+        .route("/p/{project}/{object}", get(handlers::project_object))
         .with_state(state)
 }
