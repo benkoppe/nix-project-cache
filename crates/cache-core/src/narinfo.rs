@@ -1,8 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::nix::{NixContentAddress, NixHash, NixHashError};
-
-const NIX_STORE_PREFIX: &str = "/nix/store/";
+use crate::nix::{NixContentAddress, NixHash, NixHashError, StoreDir};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NarInfo {
@@ -45,37 +43,61 @@ impl NarInfo {
         sigs.sort_unstable();
         sigs
     }
+}
 
-    pub fn render(&self) -> Result<String, NixHashError> {
-        self.render_with_signatures(&self.signatures)
+#[derive(Debug, Clone)]
+pub struct NarInfoRenderer {
+    store_dir: StoreDir,
+}
+
+impl NarInfoRenderer {
+    pub fn new(store_dir: StoreDir) -> Self {
+        Self { store_dir }
     }
 
-    pub fn render_with_signatures(&self, signatures: &[String]) -> Result<String, NixHashError> {
-        let nar_hash = self.nar_hash_nix32()?;
-        let ca = self.ca_narinfo_string();
+    pub fn store_dir(&self) -> &StoreDir {
+        &self.store_dir
+    }
+
+    pub fn render(&self, narinfo: &NarInfo) -> Result<String, NixHashError> {
+        self.render_with_signatures(narinfo, &narinfo.signatures)
+    }
+
+    pub fn render_with_signatures(
+        &self,
+        narinfo: &NarInfo,
+        signatures: &[String],
+    ) -> Result<String, NixHashError> {
+        let nar_hash = narinfo.nar_hash_nix32()?;
+        let ca = narinfo.ca_narinfo_string();
 
         let mut out = String::new();
 
-        writeln!(&mut out, "StorePath: {}", self.store_path).unwrap();
-        writeln!(&mut out, "URL: {}", self.url).unwrap();
-        writeln!(&mut out, "Compression: {}", self.compression).unwrap();
+        writeln!(&mut out, "StorePath: {}", narinfo.store_path).unwrap();
+        writeln!(&mut out, "URL: {}", narinfo.url).unwrap();
+        writeln!(&mut out, "Compression: {}", narinfo.compression).unwrap();
         writeln!(&mut out, "NarHash: {}", nar_hash).unwrap();
-        writeln!(&mut out, "NarSize: {}", self.nar_size).unwrap();
+        writeln!(&mut out, "NarSize: {}", narinfo.nar_size).unwrap();
 
         out.push_str("References:");
-        let refs = self.sorted_references();
+        let refs = narinfo.sorted_references();
         if refs.is_empty() {
-            out.push(' ');
+            out.push(' ')
         } else {
             for reference in refs {
                 out.push(' ');
-                out.push_str(trim_store_prefix(reference));
+                out.push_str(self.store_dir.display_path(reference));
             }
         }
         out.push('\n');
 
-        if let Some(deriver) = &self.deriver {
-            writeln!(&mut out, "Deriver: {}", trim_store_prefix(deriver)).unwrap();
+        if let Some(deriver) = &narinfo.deriver {
+            writeln!(
+                &mut out,
+                "Deriver: {}",
+                self.store_dir.display_path(deriver)
+            )
+            .unwrap();
         }
 
         if !signatures.is_empty() {
@@ -94,22 +116,19 @@ impl NarInfo {
         Ok(out)
     }
 
-    pub fn compress(&self) -> Result<Vec<u8>, NarInfoCompressionError> {
-        let rendered = self.render()?;
+    pub fn compress(&self, narinfo: &NarInfo) -> Result<Vec<u8>, NarInfoCompressionError> {
+        let rendered = self.render(narinfo)?;
         compress_narinfo(&rendered)
     }
 
     pub fn compress_with_signatures(
         &self,
+        narinfo: &NarInfo,
         signatures: &[String],
     ) -> Result<Vec<u8>, NarInfoCompressionError> {
-        let rendered = self.render_with_signatures(signatures)?;
+        let rendered = self.render_with_signatures(narinfo, signatures)?;
         compress_narinfo(&rendered)
     }
-}
-
-fn trim_store_prefix(path: &str) -> &str {
-    path.strip_prefix(NIX_STORE_PREFIX).unwrap_or(path)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,7 +146,9 @@ pub fn compress_narinfo(content: &str) -> Result<Vec<u8>, NarInfoCompressionErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nix::{ContentAddressMethod, HashAlgorithm, HashTextEncoding, NixContentAddress};
+    use crate::nix::{
+        ContentAddressMethod, HashAlgorithm, HashTextEncoding, NixContentAddress, StoreDir,
+    };
 
     fn sample_narinfo() -> NarInfo {
         NarInfo {
@@ -145,10 +166,14 @@ mod tests {
         }
     }
 
+    fn sample_renderer() -> NarInfoRenderer {
+        NarInfoRenderer::new(StoreDir::default())
+    }
+
     #[test]
     fn render_formats_basic_fields() {
         let narinfo = sample_narinfo();
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(
             rendered
@@ -176,7 +201,7 @@ mod tests {
             "/nix/store/mmm-package".to_owned(),
         ];
 
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(rendered.contains("References: aaa-package mmm-package zzz-package\n"));
     }
@@ -184,7 +209,7 @@ mod tests {
     #[test]
     fn render_keeps_trailing_space_for_empty_references() {
         let narinfo = sample_narinfo();
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(rendered.contains("References: \n"));
     }
@@ -194,7 +219,7 @@ mod tests {
         let mut narinfo = sample_narinfo();
         narinfo.deriver = Some("/nix/store/abcdefghijklmnopqrstuvwx-source.drv".to_owned());
 
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(rendered.contains("Deriver: abcdefghijklmnopqrstuvwx-source.drv\n"));
     }
@@ -204,7 +229,7 @@ mod tests {
         let mut narinfo = sample_narinfo();
         narinfo.signatures = vec!["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()];
 
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
         let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
@@ -214,8 +239,11 @@ mod tests {
     #[test]
     fn render_with_signatures_uses_passed_signatures() {
         let narinfo = sample_narinfo();
-        let rendered = narinfo
-            .render_with_signatures(&["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()])
+        let rendered = sample_renderer()
+            .render_with_signatures(
+                &narinfo,
+                &["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()],
+            )
             .unwrap();
 
         let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
@@ -231,7 +259,7 @@ mod tests {
             hash: NixHash::Raw("sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned()),
         });
 
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(
             rendered.contains(
@@ -243,7 +271,7 @@ mod tests {
     #[test]
     fn render_omits_sig_lines_when_no_signatures_are_present() {
         let narinfo = sample_narinfo();
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(!rendered.contains("\nSig: "));
     }
@@ -257,7 +285,7 @@ mod tests {
             digest: "020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz".to_owned(),
         };
 
-        let rendered = narinfo.render().unwrap();
+        let rendered = sample_renderer().render(&narinfo).unwrap();
 
         assert!(
             rendered
@@ -268,8 +296,11 @@ mod tests {
     #[test]
     fn render_with_signatures_sorts_supplied_signatures() {
         let narinfo = sample_narinfo();
-        let rendered = narinfo
-            .render_with_signatures(&["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()])
+        let rendered = sample_renderer()
+            .render_with_signatures(
+                &narinfo,
+                &["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()],
+            )
             .unwrap();
 
         let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
@@ -280,8 +311,21 @@ mod tests {
     #[test]
     fn compress_narinfo_produces_non_empty_output() {
         let narinfo = sample_narinfo();
-        let compressed = narinfo.compress().unwrap();
+        let compressed = sample_renderer().compress(&narinfo).unwrap();
 
         assert!(!compressed.is_empty());
+    }
+
+    #[test]
+    fn renderer_uses_custom_store_dir_when_trimming_paths() {
+        let mut narinfo = sample_narinfo();
+        narinfo.references = vec!["/custom/store/aaa-package".to_owned()];
+        narinfo.deriver = Some("/custom/store/example.drv".to_owned());
+
+        let renderer = NarInfoRenderer::new(StoreDir::new("/custom/store").unwrap());
+        let rendered = renderer.render(&narinfo).unwrap();
+
+        assert!(rendered.contains("References: aaa-package\n"));
+        assert!(rendered.contains("Deriver: example.drv\n"));
     }
 }

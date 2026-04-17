@@ -52,6 +52,81 @@ pub enum StorePathHashError {
     },
 }
 
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum StoreDirError {
+    #[error("store directory cannot be empty")]
+    Empty,
+    #[error("store directory must be absolute: {0}")]
+    NotAbsolute(String),
+}
+
+pub const DEFAULT_STORE_DIR: &str = "/nix/store";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StoreDir(String);
+
+impl StoreDir {
+    pub fn new(path: impl Into<String>) -> Result<Self, StoreDirError> {
+        let mut path = path.into();
+
+        if path.is_empty() {
+            return Err(StoreDirError::Empty);
+        }
+
+        if !path.starts_with('/') {
+            return Err(StoreDirError::NotAbsolute(path));
+        }
+
+        while path.len() > 1 && path.ends_with('/') {
+            path.pop();
+        }
+
+        Ok(Self(path))
+    }
+
+    pub fn default_nix() -> Self {
+        Self(DEFAULT_STORE_DIR.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn contains_path(&self, path: &str) -> bool {
+        if path == self.0 {
+            return true;
+        }
+
+        path.strip_prefix(&self.0)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+
+    pub fn relative_path<'a>(&self, path: &'a str) -> Option<&'a str> {
+        if path == self.0 {
+            return Some("");
+        }
+
+        path.strip_prefix(&self.0)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+    }
+
+    pub fn display_path<'a>(&self, path: &'a str) -> &'a str {
+        self.relative_path(path).unwrap_or(path)
+    }
+}
+
+impl Default for StoreDir {
+    fn default() -> Self {
+        Self::default_nix()
+    }
+}
+
+impl fmt::Display for StoreDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorePathHash(String);
 
@@ -978,5 +1053,48 @@ mod tests {
             result,
             Err(NixHashError::InvalidNixBase32Digest { .. })
         ));
+    }
+
+    #[test]
+    fn store_dir_normalizes_trailing_slash() {
+        let store_dir = StoreDir::new("/nix/store/").unwrap();
+        assert_eq!(store_dir.as_str(), "/nix/store");
+    }
+
+    #[test]
+    fn store_dir_rejects_relative_path() {
+        let result = StoreDir::new("nix/store");
+        assert!(matches!(result, Err(StoreDirError::NotAbsolute(_))));
+    }
+
+    #[test]
+    fn store_dir_contains_member_paths() {
+        let store_dir = StoreDir::new("/nix/store").unwrap();
+
+        assert!(store_dir.contains_path("/nix/store/abc"));
+        assert!(!store_dir.contains_path("/nix/storeish/abc"));
+        assert!(!store_dir.contains_path("/other/store/abc"));
+    }
+
+    #[test]
+    fn store_dir_relative_path_strips_prefix() {
+        let store_dir = StoreDir::new("/nix/store").unwrap();
+
+        assert_eq!(
+            store_dir.relative_path("/nix/store/abc-hello"),
+            Some("abc-hello")
+        );
+        assert_eq!(store_dir.relative_path("/other/store/abc-hello"), None);
+    }
+
+    #[test]
+    fn store_dir_display_path_falls_back_for_non_member_paths() {
+        let store_dir = StoreDir::new("/nix/store").unwrap();
+
+        assert_eq!(store_dir.display_path("/nix/store/abc-hello"), "abc-hello");
+        assert_eq!(
+            store_dir.display_path("/other/store/abc-hello"),
+            "/other/store/abc-hello"
+        );
     }
 }
