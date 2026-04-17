@@ -683,4 +683,13 @@ mod tests {
         assert_eq!(signatures.len(), 1);
         assert!(signatures[0].starts_with("test-key:"));
     }
+
+    #[test]
+    fn nar_hash_nix32_returns_normalized_sha256_text() {
+        let narinfo = sample_narinfo();
+        let nar_hash = narinfo.nar_hash_nix32().unwrap();
+
+        assert!(nar_hash.starts_with("sha256:"));
+        assert_eq!(nar_hash.len(), 59);
+    }
 }
