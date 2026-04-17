@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
-const NIX_BASE32_ALPHABET: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
+pub const NIX_BASE32_ALPHABET: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
 
 #[derive(Debug, Error)]
 pub enum NixHashError {
