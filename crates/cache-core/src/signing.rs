@@ -401,7 +401,7 @@ mod tests {
         )
         .unwrap();
         let key2 = NamedSigningKey::parse(
-            "cache.example.com-2:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+            "cache.example.com-2:zFD7RJEU40VJzJvgT7h5xQwFm8FufXKH2CJPaKvh/xo=",
         )
         .unwrap();
 
@@ -585,7 +585,7 @@ mod tests {
         )
         .unwrap();
         let key2 = NamedSigningKey::parse(
-            "cache.example.com-2:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+            "cache.example.com-2:zFD7RJEU40VJzJvgT7h5xQwFm8FufXKH2CJPaKvh/xo=",
         )
         .unwrap();
 
@@ -621,7 +621,7 @@ mod tests {
         )
         .unwrap();
         let key2 = NamedSigningKey::parse(
-            "cache.example.com-2:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+            "cache.example.com-2:zFD7RJEU40VJzJvgT7h5xQwFm8FufXKH2CJPaKvh/xo=",
         )
         .unwrap();
 
