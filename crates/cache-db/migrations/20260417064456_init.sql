@@ -1,5 +1,5 @@
 CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     public INTEGER NOT NULL DEFAULT 1,
@@ -7,7 +7,7 @@ CREATE TABLE projects (
 );
 
 CREATE TABLE upstream_caches (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     base_url TEXT NOT NULL,
     priority INTEGER NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE project_upstreams (
 );
 
 CREATE TABLE path_infos (
-    store_path_hash TEXT PRIMARY KEY,
+    store_path_hash TEXT NOT NULL PRIMARY KEY,
     store_path TEXT NOT NULL UNIQUE,
     url TEXT NOT NULL,
     compression TEXT NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE project_paths (
 );
 
 CREATE TABLE local_objects (
-    object_path TEXT PRIMARY KEY,
+    object_path TEXT NOT NULL PRIMARY KEY,
     content_type TEXT NOT NULL,
     content_length INTEGER NULL,
     etag TEXT NULL,
