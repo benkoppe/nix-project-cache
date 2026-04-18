@@ -114,8 +114,6 @@
         inherit checks;
         packages = devShellPackages;
 
-        DATABASE_URL = "sqlite:./dev/cache.db";
-
         shellHook = ''
           repo_root="$(${lib.getExe pkgs.git} rev-parse --show-toplevel 2>/dev/null || pwd)"
           export DATABASE_URL="sqlite://$repo_root/dev/cache.db"
