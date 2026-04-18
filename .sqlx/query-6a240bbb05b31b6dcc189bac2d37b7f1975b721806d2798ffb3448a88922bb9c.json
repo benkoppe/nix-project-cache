@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            DELETE FROM path_references\n            WHERE store_path_hash = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "6a240bbb05b31b6dcc189bac2d37b7f1975b721806d2798ffb3448a88922bb9c"
+}
