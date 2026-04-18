@@ -102,13 +102,8 @@
         pkgs.sqlx-cli
         pkgs.pkg-config
         pkgs.sqlite
-
-        self'.packages.cache-db-create
-        self'.packages.cache-db-migrate
-        self'.packages.cache-db-info
-        self'.packages.cache-db-add
-        self'.packages.cache-db-reset
       ]
+      ++ config.cache-db.devShellPackages
       ++ lib.optionals pkgs.stdenv.isDarwin [
         pkgs.libiconv
       ];
@@ -121,8 +116,7 @@
         packages = devShellPackages;
 
         shellHook = ''
-          . "${self'.packages.cache-db-shell-env}/share/cache-db/env.sh"
-
+          ${config.cache-db.installationScript}
           ${config.pre-commit.installationScript}
         '';
       };
