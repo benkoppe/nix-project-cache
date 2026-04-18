@@ -24,6 +24,7 @@
         inputs.pre-commit-hooks.flakeModule
 
         ./flake-parts/cargo.nix
+        ./flake-parts/cache-db-tools.nix
         ./flake-parts/pre-commit.nix
       ];
     };
