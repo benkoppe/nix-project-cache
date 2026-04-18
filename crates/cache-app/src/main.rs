@@ -7,7 +7,8 @@ use tracing_subscriber::EnvFilter;
 use cache_core::narinfo::NarInfoRenderer;
 use cache_core::nix::StoreDir;
 use cache_core::signing::NarInfoSigner;
-use cache_read::{AppState, InMemoryNarInfoResolver, ReadService, router};
+use cache_db::SqliteDatabase;
+use cache_read::{AppState, DbNarInfoResolver, ReadService, router};
 use cache_store::local::InMemoryLocalObjectStore;
 use cache_store::upstream::ReqwestUpstreamCacheClient;
 
@@ -20,15 +21,25 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let db_path = std::env::var("CACHE_DB_PATH").unwrap_or_else(|_| "./cache_db".to_owned());
+    let db = SqliteDatabase::open(&db_path)
+        .await
+        .context("opening sqlite metadata database")?;
+
     let store_dir = StoreDir::default();
     let renderer = NarInfoRenderer::new(store_dir.clone());
     let signer = NarInfoSigner::new(store_dir, Vec::new());
 
+    let upstreams = db
+        .list_enabled_upstreams()
+        .await
+        .context("loading enabled upstream caches")?;
+
     let read_service = ReadService::new(
-        Arc::new(InMemoryNarInfoResolver::new()),
+        Arc::new(DbNarInfoResolver::new(db)),
         Arc::new(InMemoryLocalObjectStore::new()),
         Arc::new(ReqwestUpstreamCacheClient::default()),
-        Vec::new(),
+        upstreams,
         renderer,
         signer,
     );
@@ -40,7 +51,11 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("binding TCP listener")?;
 
-    info!(address = %listener.local_addr()?, "starting cache read server");
+    info!(
+        db_path = %db_path,
+        address = %listener.local_addr()?,
+        "starting cache read server"
+    );
 
     axum::serve(listener, app).await.context("serving HTTP")?;
 
