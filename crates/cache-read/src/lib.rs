@@ -4,7 +4,7 @@ pub mod router;
 pub mod service;
 pub mod state;
 
-pub use resolver::{InMemoryNarInfoResolver, NarInfoResolver};
+pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::router;
 pub use service::ReadService;
 pub use state::AppState;

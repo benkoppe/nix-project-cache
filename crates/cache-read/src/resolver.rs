@@ -7,6 +7,7 @@ use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
 use cache_core::view::CacheView;
+use cache_db::SqliteDatabase;
 
 #[async_trait]
 pub trait NarInfoResolver: Send + Sync + 'static {
@@ -62,5 +63,32 @@ impl NarInfoResolver for InMemoryNarInfoResolver {
         };
 
         Ok(result)
+    }
+}
+
+#[derive(Clone)]
+pub struct DbNarInfoResolver {
+    db: SqliteDatabase,
+}
+
+impl DbNarInfoResolver {
+    pub fn new(db: SqliteDatabase) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait]
+impl NarInfoResolver for DbNarInfoResolver {
+    async fn resolve_narinfo(
+        &self,
+        view: &CacheView,
+        store_path_hash: &StorePathHash,
+    ) -> Result<Option<NarInfo>> {
+        match view {
+            CacheView::Aggregate => self.db.get_aggregate_narinfo(store_path_hash).await,
+            CacheView::Project(project) => {
+                self.db.get_project_narinfo(project, store_path_hash).await
+            }
+        }
     }
 }
