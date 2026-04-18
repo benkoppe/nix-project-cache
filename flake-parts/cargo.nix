@@ -56,9 +56,6 @@
           // {
             pname = "cache-app";
             cargoExtraArgs = "-p cache-app";
-
-            # TODO: figure out proper versioning
-            version = "0.1.0";
           }
         );
       };

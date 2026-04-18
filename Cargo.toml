@@ -10,6 +10,8 @@ members = [
   "crates/cache-read",
   "crates/cache-store",
 ]
+package.version = "0.0.1"
+metadata.crane.name = "nix-project-cache"
 
 [workspace.dependencies]
 axum = { version = "0.8", features = ["http1", "tokio"] }
