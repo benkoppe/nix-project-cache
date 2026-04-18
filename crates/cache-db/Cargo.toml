@@ -9,6 +9,7 @@ cache-store = { path = "../cache-store" }
 anyhow.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
