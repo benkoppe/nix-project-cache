@@ -4,7 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use cache_store::blob::BlobMetadata;
 
-use crate::models::LocalObjectRow;
+use crate::models::LocalObjectLookupRow;
 use crate::pool::SqliteDatabase;
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,31 @@ pub struct LocalObjectRecord {
     pub metadata: BlobMetadata,
     pub storage_backend: String,
     pub storage_key: String,
+}
+
+impl LocalObjectLookupRow {
+    pub fn into_record(self) -> Result<LocalObjectRecord> {
+        let last_modified = self
+            .last_modified
+            .as_deref()
+            .map(|value| OffsetDateTime::parse(value, &Rfc3339))
+            .transpose()
+            .context("parsing local object last_modified")?;
+
+        Ok(LocalObjectRecord {
+            metadata: BlobMetadata::new(
+                self.content_type,
+                self.content_length
+                    .map(u64::try_from)
+                    .transpose()
+                    .context("converting context_length to u64")?,
+                self.etag,
+                last_modified,
+            ),
+            storage_backend: self.storage_backend,
+            storage_key: self.storage_key,
+        })
+    }
 }
 
 impl SqliteDatabase {
@@ -72,17 +97,15 @@ impl SqliteDatabase {
 
     pub async fn get_local_object(&self, object_path: &str) -> Result<Option<LocalObjectRecord>> {
         let row = sqlx::query_as!(
-            LocalObjectRow,
+            LocalObjectLookupRow,
             r#"
             SELECT
-                object_path,
                 content_type,
                 content_length,
                 etag,
                 last_modified,
                 storage_backend,
-                storage_key,
-                created_at
+                storage_key
             FROM local_objects
             WHERE object_path = ?
             LIMIT 1
@@ -93,29 +116,6 @@ impl SqliteDatabase {
         .await
         .context("fetching local object")?;
 
-        row.map(row_to_local_object_record).transpose()
+        row.map(LocalObjectLookupRow::into_record).transpose()
     }
-}
-
-fn row_to_local_object_record(row: LocalObjectRow) -> Result<LocalObjectRecord> {
-    let last_modified = row
-        .last_modified
-        .as_deref()
-        .map(|value| OffsetDateTime::parse(value, &Rfc3339))
-        .transpose()
-        .context("parsing local object last_modified")?;
-
-    Ok(LocalObjectRecord {
-        metadata: BlobMetadata::new(
-            row.content_type,
-            row.content_length
-                .map(u64::try_from)
-                .transpose()
-                .context("converting context_length to u64")?,
-            row.etag,
-            last_modified,
-        ),
-        storage_backend: row.storage_backend,
-        storage_key: row.storage_key,
-    })
 }

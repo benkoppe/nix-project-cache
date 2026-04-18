@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
     let upstreams = db
         .list_enabled_upstreams()
         .await
-        .context("loading enabled upstream caches")?;
+        .context("loading enabled upstream caches")?
+        .into_iter()
+        .map(|record| record.into_runtime_config())
+        .collect();
 
     let read_service = ReadService::new(
         Arc::new(DbNarInfoResolver::new(db)),

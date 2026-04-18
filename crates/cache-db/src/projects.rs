@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use cache_core::project::ProjectSlug;
 
-use crate::models::ProjectRow;
+use crate::models::{ProjectLookupRow, ProjectRecord};
 use crate::pool::SqliteDatabase;
 
 impl SqliteDatabase {
@@ -37,11 +37,11 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn get_project_by_slug(&self, slug: &ProjectSlug) -> Result<Option<ProjectRow>> {
+    pub async fn get_project_by_slug(&self, slug: &ProjectSlug) -> Result<Option<ProjectRecord>> {
         let slug_text = slug.as_str();
 
         let row = sqlx::query_as!(
-            ProjectRow,
+            ProjectLookupRow,
             r#"
             SELECT
                 id,
@@ -59,7 +59,7 @@ impl SqliteDatabase {
         .await
         .context("getting project by slug")?;
 
-        Ok(row)
+        row.map(ProjectLookupRow::into_record).transpose()
     }
 
     pub(crate) async fn project_id_by_slug(&self, slug: &ProjectSlug) -> Result<String> {

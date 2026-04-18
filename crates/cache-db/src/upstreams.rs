@@ -4,7 +4,7 @@ use uuid::Uuid;
 use cache_core::project::ProjectSlug;
 use cache_store::upstream::UpstreamCache;
 
-use crate::models::UpstreamCacheRow;
+use crate::models::{UpstreamCacheLookupRow, UpstreamCacheRecord};
 use crate::pool::SqliteDatabase;
 
 impl SqliteDatabase {
@@ -65,9 +65,9 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn list_enabled_upstreams(&self) -> Result<Vec<UpstreamCache>> {
+    pub async fn list_enabled_upstreams(&self) -> Result<Vec<UpstreamCacheRecord>> {
         let rows = sqlx::query_as!(
-            UpstreamCacheRow,
+            UpstreamCacheLookupRow,
             r#"
             SELECT
                 id,
@@ -85,17 +85,19 @@ impl SqliteDatabase {
         .await
         .context("listing enabled upstreams")?;
 
-        rows.into_iter().map(row_to_upstream).collect()
+        rows.into_iter()
+            .map(UpstreamCacheLookupRow::into_record)
+            .collect()
     }
 
     pub async fn list_enabled_upstreams_for_project(
         &self,
         project_slug: &ProjectSlug,
-    ) -> Result<Vec<UpstreamCache>> {
+    ) -> Result<Vec<UpstreamCacheRecord>> {
         let project_slug_text = project_slug.as_str();
 
         let rows = sqlx::query_as!(
-            UpstreamCacheRow,
+            UpstreamCacheLookupRow,
             r#"
             SELECT 
                 uc.id, 
@@ -116,15 +118,8 @@ impl SqliteDatabase {
         .await
         .context("listing enabled project upstreams")?;
 
-        rows.into_iter().map(row_to_upstream).collect()
+        rows.into_iter()
+            .map(UpstreamCacheLookupRow::into_record)
+            .collect()
     }
-}
-
-fn row_to_upstream(row: UpstreamCacheRow) -> Result<UpstreamCache> {
-    Ok(UpstreamCache::new(
-        Uuid::parse_str(&row.id).context("parsing upstream id")?,
-        row.name,
-        row.base_url,
-        u32::try_from(row.priority).context("converting upstream priority")?,
-    ))
 }

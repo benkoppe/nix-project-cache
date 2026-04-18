@@ -4,7 +4,7 @@ use cache_core::narinfo::NarInfo;
 use cache_core::nix::{NixContentAddress, NixHash, StorePathHash};
 use cache_core::project::ProjectSlug;
 
-use crate::models::{PathInfoRow, PathReferenceRow, PathSignatureRow};
+use crate::models::{PathInfoLookupRow, PathReferenceValueRow, PathSignatureValueRow};
 use crate::pool::SqliteDatabase;
 
 impl SqliteDatabase {
@@ -162,18 +162,17 @@ impl SqliteDatabase {
         let store_path_hash_text = store_path_hash.as_str();
 
         let row = sqlx::query_as!(
-            PathInfoRow,
+            PathInfoLookupRow,
             r#"
             SELECT 
-                pi.store_path_hash, 
-                pi.store_path, 
-                pi.url, 
-                pi.compression, 
-                pi.nar_hash, 
-                pi.nar_size, 
-                pi.deriver, 
-                pi.ca, 
-                pi.created_at
+                pi.store_path_hash,
+                pi.store_path,
+                pi.url,
+                pi.compression,
+                pi.nar_hash,
+                pi.nar_size,
+                pi.deriver,
+                pi.ca
             FROM path_infos pi
             JOIN project_paths pp ON pp.store_path_hash = pi.store_path_hash
             JOIN projects p ON p.id = pp.project_id
@@ -201,7 +200,7 @@ impl SqliteDatabase {
         let store_path_hash_text = store_path_hash.as_str();
 
         let row = sqlx::query_as!(
-            PathInfoRow,
+            PathInfoLookupRow,
             r#"
             SELECT
                 pi.store_path_hash,
@@ -211,8 +210,7 @@ impl SqliteDatabase {
                 pi.nar_hash,
                 pi.nar_size,
                 pi.deriver,
-                pi.ca,
-                pi.created_at
+                pi.ca
             FROM path_infos pi
             WHERE pi.store_path_hash = ?
                 AND EXISTS (
@@ -237,16 +235,14 @@ impl SqliteDatabase {
         self.inflate_narinfo(row).await.map(Some)
     }
 
-    async fn inflate_narinfo(&self, path_info: PathInfoRow) -> Result<NarInfo> {
+    async fn inflate_narinfo(&self, path_info: PathInfoLookupRow) -> Result<NarInfo> {
         let store_path_hash_text = path_info.store_path_hash.as_str();
 
         let references = sqlx::query_as!(
-            PathReferenceRow,
+            PathReferenceValueRow,
             r#"
             SELECT
-                store_path_hash,
-                reference_store_path,
-                ordinal
+                reference_store_path
             FROM path_references
             WHERE store_path_hash = ?
             ORDER BY ordinal ASC
@@ -258,12 +254,10 @@ impl SqliteDatabase {
         .context("loading path references")?;
 
         let signatures = sqlx::query_as!(
-            PathSignatureRow,
+            PathSignatureValueRow,
             r#"
             SELECT
-                store_path_hash,
-                signature,
-                ordinal
+                signature
             FROM path_signatures
             WHERE store_path_hash = ?
             ORDER BY ordinal ASC

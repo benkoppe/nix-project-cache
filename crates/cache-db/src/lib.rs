@@ -123,6 +123,7 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(project_upstreams.len(), 1);
         assert_eq!(project_upstreams[0].id, upstream.id);
+        assert!(project_upstreams[0].enabled);
     }
 
     #[tokio::test]
