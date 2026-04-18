@@ -1,3 +1,5 @@
+mod config;
+
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -5,12 +7,14 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use cache_core::narinfo::NarInfoRenderer;
-use cache_core::nix::StoreDir;
 use cache_core::signing::NarInfoSigner;
 use cache_db::SqliteDatabase;
-use cache_read::{AppState, DbNarInfoResolver, ReadService, router};
-use cache_store::local::InMemoryLocalObjectStore;
+use cache_read::{
+    AppState, DbBackedLocalObjectStore, DbNarInfoResolver, DbUpstreamSelector, ReadService, router,
+};
 use cache_store::upstream::ReqwestUpstreamCacheClient;
+
+use crate::config::AppConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,28 +25,22 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let db_path = std::env::var("CACHE_DB_PATH").unwrap_or_else(|_| "./cache_db".to_owned());
-    let db = SqliteDatabase::open(&db_path)
+    let config = AppConfig::from_env().context("loading app config")?;
+    let db = SqliteDatabase::open(&config.db_path)
         .await
         .context("opening sqlite metadata database")?;
 
-    let store_dir = StoreDir::default();
-    let renderer = NarInfoRenderer::new(store_dir.clone());
-    let signer = NarInfoSigner::new(store_dir, Vec::new());
+    let renderer = NarInfoRenderer::new(config.store_dir.clone());
+    let signer = NarInfoSigner::new(config.store_dir.clone(), config.signing_keys.clone());
 
-    let upstreams = db
-        .list_enabled_upstreams()
-        .await
-        .context("loading enabled upstream caches")?
-        .into_iter()
-        .map(|record| record.into_runtime_config())
-        .collect();
+    let local_objects = DbBackedLocalObjectStore::new(db.clone(), config.local_object_backends());
+    let upstream_selector = DbUpstreamSelector::new(db.clone());
 
     let read_service = ReadService::new(
         Arc::new(DbNarInfoResolver::new(db)),
-        Arc::new(InMemoryLocalObjectStore::new()),
+        Arc::new(local_objects),
         Arc::new(ReqwestUpstreamCacheClient::default()),
-        upstreams,
+        Arc::new(upstream_selector),
         renderer,
         signer,
     );
@@ -50,12 +48,13 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(Arc::new(read_service), 30);
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
+    let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
-        .context("binding TCP listener")?;
+        .with_context(|| format!("binding TCP listener to {}", config.bind_address))?;
 
     info!(
-        db_path = %db_path,
+        db_path = %config.db_path.display(),
+        local_object_root = %config.local_object_root.display(),
         address = %listener.local_addr()?,
         "starting cache read server"
     );

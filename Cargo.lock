@@ -246,6 +246,7 @@ dependencies = [
  "cache-db",
  "cache-store",
  "http-body-util",
+ "tempfile",
  "tokio",
  "tower",
  "tracing",
@@ -261,7 +262,9 @@ dependencies = [
  "bytes",
  "cache-core",
  "reqwest",
+ "tempfile",
  "time",
+ "tokio",
  "tracing",
  "uuid",
 ]

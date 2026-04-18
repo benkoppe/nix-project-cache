@@ -8,16 +8,17 @@ use cache_core::signing::NarInfoSigner;
 use cache_core::view::CacheView;
 use cache_store::blob::{BlobBytes, BlobMetadata};
 use cache_store::local::LocalObjectStore;
-use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
+use cache_store::upstream::UpstreamCacheClient;
 
 use crate::resolver::NarInfoResolver;
+use crate::upstreams::UpstreamSelector;
 
 #[derive(Clone)]
 pub struct ReadService {
     local_resolver: Arc<dyn NarInfoResolver>,
     local_objects: Arc<dyn LocalObjectStore>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
-    upstreams: Vec<UpstreamCache>,
+    upstream_selector: Arc<dyn UpstreamSelector>,
     renderer: NarInfoRenderer,
     signer: NarInfoSigner,
 }
@@ -27,17 +28,15 @@ impl ReadService {
         local_resolver: Arc<dyn NarInfoResolver>,
         local_objects: Arc<dyn LocalObjectStore>,
         upstream_client: Arc<dyn UpstreamCacheClient>,
-        mut upstreams: Vec<UpstreamCache>,
+        upstream_selector: Arc<dyn UpstreamSelector>,
         renderer: NarInfoRenderer,
         signer: NarInfoSigner,
     ) -> Self {
-        upstreams.sort_by_key(|upstream| upstream.priority);
-
         Self {
             local_resolver,
             local_objects,
             upstream_client,
-            upstreams,
+            upstream_selector,
             renderer,
             signer,
         }
@@ -60,10 +59,10 @@ impl ReadService {
             return Ok(Some(self.render_signed_narinfo(narinfo)?));
         }
 
-        for upstream in &self.upstreams {
+        for upstream in self.upstream_selector.upstreams_for_view(view).await? {
             if let Some(narinfo_text) = self
                 .upstream_client
-                .fetch_narinfo_text(upstream, store_path_hash)
+                .fetch_narinfo_text(&upstream, store_path_hash)
                 .await?
             {
                 let narinfo = parse_narinfo(&narinfo_text, self.renderer.store_dir())?;
@@ -76,14 +75,14 @@ impl ReadService {
 
     pub async fn get_object(
         &self,
-        _view: &CacheView,
+        view: &CacheView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
         if let Some(result) = self.local_objects.get(object_path).await? {
             return Ok(Some(result));
         }
 
-        for upstream in &self.upstreams {
+        for upstream in &self.upstream_selector.upstreams_for_view(view).await? {
             if let Some(result) = self
                 .upstream_client
                 .get_object(upstream, object_path)

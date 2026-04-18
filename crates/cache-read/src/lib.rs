@@ -1,13 +1,17 @@
 pub mod handlers;
+pub mod local_objects;
 pub mod resolver;
 pub mod router;
 pub mod service;
 pub mod state;
+pub mod upstreams;
 
+pub use local_objects::DbBackedLocalObjectStore;
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::router;
 pub use service::ReadService;
 pub use state::AppState;
+pub use upstreams::{DbUpstreamSelector, StaticUpstreamSelector, UpstreamSelector};
 
 #[cfg(test)]
 mod tests {
@@ -29,7 +33,7 @@ mod tests {
     use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::{InMemoryUpstreamCacheClient, UpstreamCache};
 
-    use crate::{AppState, InMemoryNarInfoResolver, ReadService, router};
+    use crate::{AppState, InMemoryNarInfoResolver, ReadService, StaticUpstreamSelector, router};
 
     fn sample_narinfo() -> NarInfo {
         NarInfo {
@@ -84,11 +88,13 @@ mod tests {
         resolver.insert_aggregate(hash.clone(), narinfo.clone());
         resolver.insert_project(ProjectSlug::parse("example_repo").unwrap(), hash, narinfo);
 
+        let upstream_selector = Arc::new(StaticUpstreamSelector::new());
+
         let read_service = ReadService::new(
             Arc::new(resolver),
             Arc::new(sample_local_object_store()),
             Arc::new(InMemoryUpstreamCacheClient::new()),
-            Vec::new(),
+            upstream_selector,
             renderer,
             signer,
         );
@@ -139,11 +145,14 @@ Sig: cache.nixos.org-1:upstreamsig
             Bytes::from_static(b"upstream-nar"),
         );
 
+        let mut upstream_selector = StaticUpstreamSelector::new();
+        upstream_selector.set_aggregate_upstreams(vec![upstream]);
+
         let read_service = ReadService::new(
             Arc::new(resolver),
             Arc::new(InMemoryLocalObjectStore::new()),
             Arc::new(upstream_client),
-            vec![upstream],
+            Arc::new(upstream_selector),
             renderer,
             signer,
         );
