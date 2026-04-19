@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT OR IGNORE INTO build_paths (build_id, store_path_hash)\n            VALUES (?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6118ea9cc6a4506bd2217aecfc2c1ba704d25ccfe4dee9f46a79d8d1a45854b2"
+}

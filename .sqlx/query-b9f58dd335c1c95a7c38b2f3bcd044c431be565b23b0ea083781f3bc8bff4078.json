@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT\n                pi.store_path_hash,\n                pi.store_path,\n                pi.url,\n                pi.compression,\n                pi.nar_hash,\n                pi.nar_size,\n                pi.deriver,\n                pi.ca\n            FROM path_infos pi\n            WHERE pi.store_path_hash = ?\n                AND EXISTS (\n                    SELECT 1\n                    FROM project_paths pp\n                    JOIN projects p ON p.id = pp.project_id\n                    WHERE pp.store_path_hash = pi.store_path_hash\n                        AND p.public = 1\n                )\n            LIMIT 1\n            ",
+  "query": "\n            SELECT \n                pi.store_path_hash,\n                pi.store_path,\n                pi.url,\n                pi.compression,\n                pi.nar_hash,\n                pi.nar_size,\n                pi.deriver,\n                pi.ca\n            FROM path_infos pi\n            JOIN project_visible_paths pvp ON pvp.store_path_hash = pi.store_path_hash\n            JOIN projects p ON p.id = pvp.project_id\n            WHERE p.slug = ? AND pi.store_path_hash = ?\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "66bdbf6798a68ab3e504f1be762cff40b00c224cdc5f4a7581f813582095ae96"
+  "hash": "b9f58dd335c1c95a7c38b2f3bcd044c431be565b23b0ea083781f3bc8bff4078"
 }
