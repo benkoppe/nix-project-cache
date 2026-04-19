@@ -60,10 +60,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let read_state = ReadAppState::new(Arc::new(read_service), 30);
-    let write_state = WriteAppState {
-        ingest_service: Arc::new(ingest_service),
-        authorizer: Arc::new(StaticTokenAuthorizer::new(config.write_token.clone())),
-    };
+    let write_state = WriteAppState::new(
+        Arc::new(ingest_service),
+        Arc::new(StaticTokenAuthorizer::new(config.write_token.clone())),
+    );
 
     let app = read_router(read_state).merge(write_router(write_state));
 
