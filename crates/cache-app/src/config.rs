@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub store_dir: StoreDir,
     pub local_object_root: PathBuf,
     pub signing_keys: Vec<NamedSigningKey>,
+    pub write_token: Option<String>,
 }
 
 impl AppConfig {
@@ -46,12 +47,15 @@ impl AppConfig {
             Err(_) => Vec::new(),
         };
 
+        let write_token = env::var("CACHE_WRITE_TOKEN").ok();
+
         Ok(Self {
             bind_address,
             db_path,
             store_dir,
             local_object_root,
             signing_keys,
+            write_token,
         })
     }
 

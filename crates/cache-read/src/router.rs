@@ -2,9 +2,9 @@ use axum::Router;
 use axum::routing::get;
 
 use crate::handlers;
-use crate::state::AppState;
+use crate::state::ReadAppState;
 
-pub fn router(state: AppState) -> Router {
+pub fn read_router(state: ReadAppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
         .route("/nix-cache-info", get(handlers::aggregate_cache_info))

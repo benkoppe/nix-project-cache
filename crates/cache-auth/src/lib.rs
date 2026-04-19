@@ -1,14 +1,50 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Principal {
+    pub subject: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug, Error)]
+pub enum AuthError {
+    #[error("write API is disabled")]
+    Disabled,
+    #[error("missing bearer token")]
+    MissingToken,
+    #[error("invalid bearer token")]
+    InvalidToken,
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+pub trait Authorizer: Send + Sync + 'static {
+    fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticTokenAuthorizer {
+    configured_token: Option<String>,
+}
+
+impl StaticTokenAuthorizer {
+    pub fn new(configured_token: Option<String>) -> Self {
+        Self { configured_token }
+    }
+}
+
+impl Authorizer for StaticTokenAuthorizer {
+    fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError> {
+        let configured = self
+            .configured_token
+            .as_deref()
+            .ok_or(AuthError::Disabled)?;
+
+        let provided = bearer_token.ok_or(AuthError::MissingToken)?;
+
+        if provided == configured {
+            Ok(Principal {
+                subject: "static-token".to_owned(),
+            })
+        } else {
+            Err(AuthError::InvalidToken)
+        }
     }
 }

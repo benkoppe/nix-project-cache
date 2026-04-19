@@ -118,3 +118,103 @@ pub struct LocalObjectLookupRow {
     pub storage_backend: String,
     pub storage_key: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildStatus {
+    Pending,
+    Finalized,
+}
+
+impl BuildStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Finalized => "finalized",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "finalized" => Ok(Self::Finalized),
+            other => Err(anyhow::anyhow!("invalid build status {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildLookupRow {
+    pub id: String,
+    pub project_id: String,
+    pub ref_name: String,
+    pub revision: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub finalized_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub ref_name: String,
+    pub revision: Option<String>,
+    pub status: BuildStatus,
+    pub created_at: OffsetDateTime,
+    pub finalized_at: Option<OffsetDateTime>,
+}
+
+impl BuildLookupRow {
+    pub fn into_record(self) -> Result<BuildRecord> {
+        Ok(BuildRecord {
+            id: Uuid::parse_str(&self.id).context("parsing build id")?,
+            project_id: Uuid::parse_str(&self.project_id).context("parsing build project_id")?,
+            ref_name: self.ref_name,
+            revision: self.revision,
+            status: BuildStatus::parse(&self.status)?,
+            created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
+                .context("parsing build created_at")?,
+            finalized_at: self
+                .finalized_at
+                .as_deref()
+                .map(|value| OffsetDateTime::parse(value, &Rfc3339))
+                .transpose()
+                .context("parsing build finalized_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildContextRow {
+    pub build_id: String,
+    pub project_id: String,
+    pub project_slug: String,
+    pub ref_name: String,
+    pub revision: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildContextRecord {
+    pub build_id: Uuid,
+    pub project_id: Uuid,
+    pub project_slug: ProjectSlug,
+    pub ref_name: String,
+    pub revision: Option<String>,
+    pub status: BuildStatus,
+}
+
+impl BuildContextRow {
+    pub fn into_record(self) -> Result<BuildContextRecord> {
+        Ok(BuildContextRecord {
+            build_id: Uuid::parse_str(&self.build_id).context("parsing build context build_id")?,
+            project_id: Uuid::parse_str(&self.project_id)
+                .context("parsing build context project_id")?,
+            project_slug: ProjectSlug::parse(&self.project_slug)
+                .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.project_slug))?,
+            ref_name: self.ref_name,
+            revision: self.revision,
+            status: BuildStatus::parse(&self.status)?,
+        })
+    }
+}

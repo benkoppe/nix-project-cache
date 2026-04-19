@@ -51,14 +51,6 @@ CREATE TABLE path_signatures (
     FOREIGN KEY (store_path_hash) REFERENCES path_infos(store_path_hash) ON DELETE CASCADE
 );
 
-CREATE TABLE project_paths (
-    project_id TEXT NOT NULL,
-    store_path_hash TEXT NOT NULL,
-    PRIMARY KEY (project_id, store_path_hash),
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-    FOREIGN KEY (store_path_hash) REFERENCES path_infos(store_path_hash) ON DELETE CASCADE
-);
-
 CREATE TABLE local_objects (
     object_path TEXT NOT NULL PRIMARY KEY,
     content_type TEXT NOT NULL,
@@ -71,7 +63,6 @@ CREATE TABLE local_objects (
 );
 
 CREATE INDEX idx_projects_slug ON projects(slug);
-CREATE INDEX idx_project_paths_store_path_hash ON project_paths(store_path_hash);
 CREATE INDEX idx_project_upstreams_upstream_id ON project_upstreams(upstream_id);
 CREATE INDEX idx_path_references_store_path_hash ON path_references(store_path_hash);
 CREATE INDEX idx_path_signatures_store_path_hash ON path_signatures(store_path_hash);

@@ -130,29 +130,6 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn link_path_to_project(
-        &self,
-        project_slug: &ProjectSlug,
-        store_path_hash: &StorePathHash,
-    ) -> Result<()> {
-        let project_id = self.project_id_by_slug(project_slug).await?;
-        let store_path_hash_text = store_path_hash.as_str();
-
-        sqlx::query!(
-            r#"
-            INSERT OR IGNORE INTO project_paths (project_id, store_path_hash)
-            VALUES (?, ?)
-            "#,
-            project_id,
-            store_path_hash_text,
-        )
-        .execute(&self.pool)
-        .await
-        .context("linking path to project")?;
-
-        Ok(())
-    }
-
     pub async fn get_project_narinfo(
         &self,
         project_slug: &ProjectSlug,
@@ -174,8 +151,8 @@ impl SqliteDatabase {
                 pi.deriver,
                 pi.ca
             FROM path_infos pi
-            JOIN project_paths pp ON pp.store_path_hash = pi.store_path_hash
-            JOIN projects p ON p.id = pp.project_id
+            JOIN project_visible_paths pvp ON pvp.store_path_hash = pi.store_path_hash
+            JOIN projects p ON p.id = pvp.project_id
             WHERE p.slug = ? AND pi.store_path_hash = ?
             LIMIT 1
             "#,
@@ -215,10 +192,8 @@ impl SqliteDatabase {
             WHERE pi.store_path_hash = ?
                 AND EXISTS (
                     SELECT 1
-                    FROM project_paths pp
-                    JOIN projects p ON p.id = pp.project_id
-                    WHERE pp.store_path_hash = pi.store_path_hash
-                        AND p.public = 1
+                    FROM aggregate_visible_paths avp
+                    WHERE avp.store_path_hash = pi.store_path_hash
                 )
             LIMIT 1
             "#,

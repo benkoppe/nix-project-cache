@@ -49,6 +49,12 @@ pub trait UpstreamCacheClient: Send + Sync + 'static {
         store_path_hash: &StorePathHash,
     ) -> Result<Option<String>>;
 
+    async fn head_object(
+        &self,
+        upstream: &UpstreamCache,
+        object_path: &str,
+    ) -> Result<Option<BlobMetadata>>;
+
     async fn get_object(
         &self,
         upstream: &UpstreamCache,
@@ -99,6 +105,37 @@ impl UpstreamCacheClient for ReqwestUpstreamCacheClient {
                 "upstream {} returned unexpected status {} for narinfo",
                 upstream.name,
                 status
+            )),
+        }
+    }
+
+    async fn head_object(
+        &self,
+        upstream: &UpstreamCache,
+        object_path: &str,
+    ) -> Result<Option<BlobMetadata>> {
+        let response = self
+            .client
+            .head(upstream.object_url(object_path))
+            .send()
+            .await
+            .with_context(|| format!("heading object from upstream {}", upstream.name))?;
+
+        match response.status() {
+            StatusCode::OK => Ok(Some(blob_metadata_from_response(&response))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::METHOD_NOT_ALLOWED => {
+                // Some upstreams may not support HEAD cleanly; fall back to GET.
+                match self.get_object(upstream, object_path).await? {
+                    Some((metadata, _)) => Ok(Some(metadata)),
+                    None => Ok(None),
+                }
+            }
+            status => Err(anyhow!(
+                "upstream {} returned unexpected status {} for HEAD object {}",
+                upstream.name,
+                status,
+                object_path
             )),
         }
     }
@@ -178,6 +215,17 @@ impl UpstreamCacheClient for InMemoryUpstreamCacheClient {
             .cloned())
     }
 
+    async fn head_object(
+        &self,
+        upstream: &UpstreamCache,
+        object_path: &str,
+    ) -> Result<Option<BlobMetadata>> {
+        Ok(self
+            .objects
+            .get(&(upstream.id, object_path.to_owned()))
+            .map(|(metadata, _)| metadata.clone()))
+    }
+
     async fn get_object(
         &self,
         upstream: &UpstreamCache,
@@ -207,4 +255,166 @@ fn blob_metadata_from_response(response: &reqwest::Response) -> BlobMetadata {
         .map(ToOwned::to_owned);
 
     BlobMetadata::new(content_type, content_length, etag, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::Router;
+    use axum::http::Method;
+    use axum::http::{HeaderValue, StatusCode, header};
+    use axum::response::IntoResponse;
+    use axum::routing::{any, get};
+    use tokio::net::TcpListener;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn sample_store_path_hash() -> StorePathHash {
+        StorePathHash::parse_from_store_path(
+            "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1",
+        )
+        .unwrap()
+    }
+    fn sample_upstream(base_url: String) -> UpstreamCache {
+        UpstreamCache::new(Uuid::now_v7(), "test-upstream", base_url, 10)
+    }
+    fn sample_narinfo_text() -> &'static str {
+        "\
+StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1
+URL: nar/test.nar
+Compression: zstd
+NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
+NarSize: 226560
+References: 
+"
+    }
+    async fn spawn_server(app: Router) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{}", addr)
+    }
+    async fn narinfo_ok() -> impl IntoResponse {
+        (
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/x-nix-narinfo"),
+            )],
+            sample_narinfo_text(),
+        )
+    }
+    async fn object_ok() -> impl IntoResponse {
+        (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                ),
+                (header::ETAG, HeaderValue::from_static("\"abc123\"")),
+            ],
+            BlobBytes::from_static(b"payload"),
+        )
+    }
+    async fn object_head_405_get_ok(method: Method) -> impl IntoResponse {
+        if method == Method::HEAD {
+            StatusCode::METHOD_NOT_ALLOWED.into_response()
+        } else {
+            (
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/octet-stream"),
+                    ),
+                    (header::ETAG, HeaderValue::from_static("\"fallback\"")),
+                ],
+                BlobBytes::from_static(b"payload"),
+            )
+                .into_response()
+        }
+    }
+    #[tokio::test]
+    async fn fetch_narinfo_text_returns_text_on_200() {
+        let app = Router::new().route("/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo", get(narinfo_ok));
+        let base_url = spawn_server(app).await;
+        let upstream = sample_upstream(base_url);
+        let client = ReqwestUpstreamCacheClient::default();
+        let text = client
+            .fetch_narinfo_text(&upstream, &sample_store_path_hash())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            text.contains("StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1")
+        );
+    }
+    #[tokio::test]
+    async fn fetch_narinfo_text_returns_none_on_404() {
+        let app = Router::new();
+        let base_url = spawn_server(app).await;
+        let upstream = sample_upstream(base_url);
+        let client = ReqwestUpstreamCacheClient::default();
+        let text = client
+            .fetch_narinfo_text(&upstream, &sample_store_path_hash())
+            .await
+            .unwrap();
+        assert!(text.is_none());
+    }
+    #[tokio::test]
+    async fn head_object_returns_metadata_on_200() {
+        let app = Router::new().route("/nar/test.nar", get(object_ok));
+        let base_url = spawn_server(app).await;
+        let upstream = sample_upstream(base_url);
+        let client = ReqwestUpstreamCacheClient::default();
+        let metadata = client
+            .head_object(&upstream, "nar/test.nar")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.content_type, "application/octet-stream");
+        assert_eq!(metadata.etag.as_deref(), Some("\"abc123\""));
+    }
+    #[tokio::test]
+    async fn head_object_returns_none_on_404() {
+        let app = Router::new();
+        let base_url = spawn_server(app).await;
+        let upstream = sample_upstream(base_url);
+        let client = ReqwestUpstreamCacheClient::default();
+        let metadata = client.head_object(&upstream, "nar/test.nar").await.unwrap();
+        assert!(metadata.is_none());
+    }
+    #[tokio::test]
+    async fn head_object_falls_back_to_get_on_405() {
+        let app = Router::new().route("/nar/test.nar", any(object_head_405_get_ok));
+        let base_url = spawn_server(app).await;
+        let upstream = sample_upstream(base_url);
+        let client = ReqwestUpstreamCacheClient::default();
+        let metadata = client
+            .head_object(&upstream, "nar/test.nar")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.content_type, "application/octet-stream");
+        assert_eq!(metadata.etag.as_deref(), Some("\"fallback\""));
+    }
+    #[tokio::test]
+    async fn in_memory_upstream_head_object_returns_metadata() {
+        let upstream = UpstreamCache::new(
+            Uuid::now_v7(),
+            "test-upstream",
+            "https://example.invalid",
+            10,
+        );
+        let mut client = InMemoryUpstreamCacheClient::new();
+        let metadata = BlobMetadata::new("application/octet-stream", Some(7), None, None);
+        client.insert_object(
+            upstream.id,
+            "nar/test.nar",
+            metadata.clone(),
+            BlobBytes::from_static(b"payload"),
+        );
+        let loaded = client.head_object(&upstream, "nar/test.nar").await.unwrap();
+        assert_eq!(loaded, Some(metadata));
+    }
 }

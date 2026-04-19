@@ -9,6 +9,7 @@ members = [
   "crates/cache-ingest",
   "crates/cache-read",
   "crates/cache-store",
+  "crates/cache-write",
 ]
 package.version = "0.0.1"
 metadata.crane.name = "nix-project-cache"

@@ -1,0 +1,24 @@
+[package]
+name = "cache-write"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+cache-api = { path = "../cache-api" }
+cache-auth = { path = "../cache-auth" }
+cache-ingest = { path = "../cache-ingest" }
+axum.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+cache-core = { path = "../cache-core" }
+cache-db = { path = "../cache-db" }
+cache-store = { path = "../cache-store" }
+bytes.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tower.workspace = true
+serde = { workspace = true, features = ["derive"] }

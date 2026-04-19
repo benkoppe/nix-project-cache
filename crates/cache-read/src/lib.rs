@@ -8,9 +8,9 @@ pub mod upstreams;
 
 pub use local_objects::DbBackedLocalObjectStore;
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
-pub use router::router;
+pub use router::read_router;
 pub use service::ReadService;
-pub use state::AppState;
+pub use state::ReadAppState;
 pub use upstreams::{DbUpstreamSelector, StaticUpstreamSelector, UpstreamSelector};
 
 #[cfg(test)]
@@ -33,7 +33,9 @@ mod tests {
     use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::{InMemoryUpstreamCacheClient, UpstreamCache};
 
-    use crate::{AppState, InMemoryNarInfoResolver, ReadService, StaticUpstreamSelector, router};
+    use crate::{
+        InMemoryNarInfoResolver, ReadAppState, ReadService, StaticUpstreamSelector, read_router,
+    };
 
     fn sample_narinfo() -> NarInfo {
         NarInfo {
@@ -68,7 +70,7 @@ mod tests {
         store
     }
 
-    fn sample_state() -> AppState {
+    fn sample_state() -> ReadAppState {
         let store_dir = StoreDir::default();
         let renderer = NarInfoRenderer::new(store_dir.clone());
         let signer = NarInfoSigner::new(
@@ -99,10 +101,10 @@ mod tests {
             signer,
         );
 
-        AppState::new(Arc::new(read_service), 30)
+        ReadAppState::new(Arc::new(read_service), 30)
     }
 
-    fn upstream_fallback_state() -> AppState {
+    fn upstream_fallback_state() -> ReadAppState {
         let store_dir = StoreDir::default();
         let renderer = NarInfoRenderer::new(store_dir.clone());
         let signer = NarInfoSigner::new(
@@ -157,7 +159,7 @@ Sig: cache.nixos.org-1:upstreamsig
             signer,
         );
 
-        AppState::new(Arc::new(read_service), 30)
+        ReadAppState::new(Arc::new(read_service), 30)
     }
 
     async fn body_to_bytes(response: axum::response::Response) -> Bytes {
@@ -170,7 +172,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn health_returns_ok() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -189,7 +191,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn aggregate_nix_cache_info_returns_expected_text() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -221,7 +223,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn project_nix_cache_info_returns_expected_text() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -239,7 +241,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn aggregate_narinfo_route_returns_rendered_signed_narinfo() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -280,7 +282,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn project_narinfo_route_returns_rendered_signed_narinfo() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -307,7 +309,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn local_nar_route_returns_blob_bytes() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -338,7 +340,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn upstream_narinfo_fallback_returns_rendered_signed_narinfo() {
-        let app = router(upstream_fallback_state());
+        let app = read_router(upstream_fallback_state());
 
         let response = app
             .oneshot(
@@ -363,7 +365,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn upstream_nar_blob_fallback_returns_bytes() {
-        let app = router(upstream_fallback_state());
+        let app = read_router(upstream_fallback_state());
 
         let response = app
             .oneshot(
@@ -385,7 +387,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn missing_narinfo_returns_not_found() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -403,7 +405,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn invalid_object_path_returns_not_found() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -421,7 +423,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn invalid_project_slug_returns_not_found() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(
@@ -439,7 +441,7 @@ Sig: cache.nixos.org-1:upstreamsig
 
     #[tokio::test]
     async fn head_narinfo_is_supported() {
-        let app = router(sample_state());
+        let app = read_router(sample_state());
 
         let response = app
             .oneshot(

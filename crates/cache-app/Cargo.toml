@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cache-auth = { path = "../cache-auth" }
 cache-core = { path = "../cache-core" }
+cache-db = { path = "../cache-db" }
 cache-read = { path = "../cache-read" }
 cache-store = { path = "../cache-store" }
-cache-db = { path = "../cache-db" }
+cache-write = { path = "../cache-write" }
+cache-ingest = { path = "../cache-ingest" }
 anyhow.workspace = true
 axum.workspace = true
 tokio = { workspace = true, features = ["net"] }

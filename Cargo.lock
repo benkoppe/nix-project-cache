@@ -180,6 +180,11 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "cache-api"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cache-core",
+ "serde",
+]
 
 [[package]]
 name = "cache-app"
@@ -187,10 +192,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "cache-auth",
  "cache-core",
  "cache-db",
+ "cache-ingest",
  "cache-read",
  "cache-store",
+ "cache-write",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -199,6 +207,9 @@ dependencies = [
 [[package]]
 name = "cache-auth"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "cache-core"
@@ -233,6 +244,18 @@ dependencies = [
 [[package]]
 name = "cache-ingest"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "cache-api",
+ "cache-core",
+ "cache-db",
+ "cache-store",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "cache-read"
@@ -259,12 +282,35 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "bytes",
  "cache-core",
  "reqwest",
  "tempfile",
  "time",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cache-write"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "cache-api",
+ "cache-auth",
+ "cache-core",
+ "cache-db",
+ "cache-ingest",
+ "cache-store",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]

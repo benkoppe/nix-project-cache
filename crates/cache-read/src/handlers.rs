@@ -8,19 +8,19 @@ use cache_core::view::CacheView;
 
 use cache_store::blob::{BlobBytes, BlobMetadata};
 
-use crate::state::AppState;
+use crate::state::ReadAppState;
 
 pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok\n")
 }
 
-pub async fn aggregate_cache_info(State(state): State<AppState>) -> Response {
+pub async fn aggregate_cache_info(State(state): State<ReadAppState>) -> Response {
     cache_info_response(&state)
 }
 
 pub async fn project_cache_info(
     Path(project): Path<String>,
-    State(state): State<AppState>,
+    State(state): State<ReadAppState>,
 ) -> Response {
     if ProjectSlug::parse(&project).is_err() {
         return StatusCode::NOT_FOUND.into_response();
@@ -31,14 +31,14 @@ pub async fn project_cache_info(
 
 pub async fn aggregate_object(
     Path(object): Path<String>,
-    State(state): State<AppState>,
+    State(state): State<ReadAppState>,
 ) -> Response {
     serve_object(CacheView::Aggregate, &object, &state).await
 }
 
 pub async fn project_object(
     Path((project, object)): Path<(String, String)>,
-    State(state): State<AppState>,
+    State(state): State<ReadAppState>,
 ) -> Response {
     let project = match ProjectSlug::parse(&project) {
         Ok(project) => project,
@@ -48,7 +48,7 @@ pub async fn project_object(
     serve_object(CacheView::Project(project), &object, &state).await
 }
 
-fn cache_info_response(state: &AppState) -> Response {
+fn cache_info_response(state: &ReadAppState) -> Response {
     (
         [(
             header::CONTENT_TYPE,
@@ -59,7 +59,7 @@ fn cache_info_response(state: &AppState) -> Response {
         .into_response()
 }
 
-async fn serve_object(view: CacheView, object: &str, state: &AppState) -> Response {
+async fn serve_object(view: CacheView, object: &str, state: &ReadAppState) -> Response {
     match parse_cache_object_path(object) {
         Some(CacheObjectPath::NarInfo { store_path_hash }) => {
             match state

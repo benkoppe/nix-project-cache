@@ -19,6 +19,7 @@ pub trait LocalObjectStore: Send + Sync + 'static {
 pub trait LocalObjectBackend: Send + Sync + 'static {
     async fn contains(&self, storage_key: &str) -> Result<bool>;
     async fn get_bytes(&self, storage_key: &str) -> Result<Option<BlobBytes>>;
+    async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()>;
 }
 
 #[derive(Clone, Default)]
@@ -41,6 +42,11 @@ impl LocalObjectBackendRegistry {
 
     pub fn get(&self, backend_name: &str) -> Option<Arc<dyn LocalObjectBackend>> {
         self.backends.get(backend_name).cloned()
+    }
+
+    pub fn require(&self, backend_name: &str) -> Result<Arc<dyn LocalObjectBackend>> {
+        self.get(backend_name)
+            .ok_or_else(|| anyhow!("no local object backend registered for {}", backend_name))
     }
 }
 
@@ -99,6 +105,34 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
                 Err(error).with_context(|| format!("reading filesystem object {}", path.display()))
             }
         }
+    }
+
+    async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()> {
+        let path = self.resolve_storage_key(storage_key)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("storage key {} resolved without parent", storage_key))?;
+
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| anyhow!("creating parent directories for {}", path.display()))?;
+        //
+        let temp_path = parent.join(format!(
+            ".{}.tmp",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("object")
+        ));
+
+        fs::write(&temp_path, &bytes)
+            .await
+            .with_context(|| format!("writing temporary object {}", temp_path.display()))?;
+
+        fs::rename(&temp_path, &path)
+            .await
+            .with_context(|| format!("renaming {} to {}", temp_path.display(), path.display()))?;
+
+        Ok(())
     }
 }
 
@@ -177,5 +211,61 @@ mod tests {
         let result = backend.get_bytes("../escape").await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn filesystem_backend_put_bytes_writes_and_reads_back() {
+        let temp_dir = tempdir().unwrap();
+        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+
+        backend
+            .put_bytes(
+                "objects/nar/test.nar",
+                BlobBytes::from_static(b"hello world"),
+            )
+            .await
+            .unwrap();
+        let bytes = backend
+            .get_bytes("objects/nar/test.nar")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(bytes, BlobBytes::from_static(b"hello world"));
+    }
+
+    #[tokio::test]
+    async fn filesystem_backend_put_bytes_overwrites_existing_content() {
+        let temp_dir = tempdir().unwrap();
+        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+
+        backend
+            .put_bytes("objects/nar/test.nar", BlobBytes::from_static(b"old"))
+            .await
+            .unwrap();
+        backend
+            .put_bytes("objects/nar/test.nar", BlobBytes::from_static(b"new"))
+            .await
+            .unwrap();
+
+        let bytes = backend
+            .get_bytes("objects/nar/test.nar")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(bytes, BlobBytes::from_static(b"new"));
+    }
+
+    #[tokio::test]
+    async fn backend_registry_require_returns_registered_backend() {
+        let temp_dir = tempdir().unwrap();
+        let backend = std::sync::Arc::new(FilesystemLocalObjectBackend::new(temp_dir.path()));
+        let mut registry = LocalObjectBackendRegistry::new();
+
+        registry.register("fs", backend);
+
+        assert!(registry.require("fs").is_ok());
+        assert!(registry.require("missing").is_err());
     }
 }

@@ -3,12 +3,12 @@ use std::sync::Arc;
 use crate::service::ReadService;
 
 #[derive(Clone)]
-pub struct AppState {
+pub struct ReadAppState {
     pub read_service: Arc<ReadService>,
     pub priority: u32,
 }
 
-impl AppState {
+impl ReadAppState {
     pub fn new(read_service: Arc<ReadService>, priority: u32) -> Self {
         Self {
             read_service,
