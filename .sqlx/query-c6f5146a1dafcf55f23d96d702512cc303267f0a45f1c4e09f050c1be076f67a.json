@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT DISTINCT store_path_hash\n            FROM (\n                SELECT bp.store_path_hash AS store_path_hash\n                FROM project_refs pr\n                JOIN build_paths bp ON bp.build_id = pr.build_id\n\n                UNION\n\n                SELECT pins.store_path_hash AS store_path_hash\n                FROM pins\n            )\n            ORDER BY store_path_hash ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "store_path_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6f5146a1dafcf55f23d96d702512cc303267f0a45f1c4e09f050c1be076f67a"
+}

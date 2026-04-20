@@ -177,4 +177,19 @@ impl SqliteDatabase {
 
         Ok(row.is_some())
     }
+
+    pub async fn delete_local_object(&self, object_path: &str) -> Result<()> {
+        sqlx::query!(
+            r#"
+            DELETE FROM local_objects
+            WHERE object_path = ?
+            "#,
+            object_path,
+        )
+        .execute(&self.pool)
+        .await
+        .context("deleting local object")?;
+
+        Ok(())
+    }
 }

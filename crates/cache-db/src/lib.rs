@@ -1,7 +1,9 @@
 mod builds;
+mod gc;
 mod models;
 mod objects;
 mod paths;
+mod pins;
 mod pool;
 mod projects;
 mod upstreams;
