@@ -4,6 +4,8 @@ use cache_api::RunGcResponse;
 use cache_db::SqliteDatabase;
 use cache_store::local::LocalObjectBackendRegistry;
 
+const DEFAULT_GC_GRACE_PERIOD_SECONDS: i64 = 6 * 60 * 60;
+
 #[derive(Clone)]
 pub struct GcService {
     db: SqliteDatabase,
@@ -16,18 +18,34 @@ impl GcService {
     }
 
     pub async fn run_local_gc(&self, dry_run: bool) -> Result<RunGcResponse> {
-        let stale_paths = self.db.list_stale_local_object_paths().await?;
+        self.run_local_gc_with_grace_period(dry_run, DEFAULT_GC_GRACE_PERIOD_SECONDS)
+            .await
+    }
 
+    pub async fn run_local_gc_with_grace_period(
+        &self,
+        dry_run: bool,
+        grace_period_seconds: i64,
+    ) -> Result<RunGcResponse> {
         if dry_run {
+            let stale_paths = self.db.list_stale_local_object_paths().await?;
             return Ok(RunGcResponse {
                 deleted_count: stale_paths.len(),
                 deleted_objects: stale_paths,
             });
         }
 
-        let mut deleted = Vec::with_capacity(stale_paths.len());
+        self.db.clear_deleted_state_for_live_local_objects().await?;
+        self.db.mark_stale_local_objects().await?;
 
-        for object_path in stale_paths {
+        let ready_paths = self
+            .db
+            .list_local_objects_ready_for_deletion(grace_period_seconds)
+            .await?;
+
+        let mut deleted = Vec::with_capacity(ready_paths.len());
+
+        for object_path in ready_paths {
             let Some(record) = self.db.get_local_object(&object_path).await? else {
                 continue;
             };
@@ -47,13 +65,10 @@ impl GcService {
                 .await
                 .with_context(|| format!("deleting backend object {}", object_path))?;
 
-            self.db
-                .delete_local_object(&object_path)
-                .await
-                .with_context(|| format!("deleting local object row {}", object_path))?;
-
             deleted.push(object_path);
         }
+
+        self.db.delete_local_objects_by_path(&deleted).await?;
 
         Ok(RunGcResponse {
             deleted_count: deleted.len(),
@@ -69,6 +84,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::tempdir;
 
+    use cache_core::narinfo::NarInfo;
     use cache_core::nix::{NixHash, StorePathHash};
     use cache_core::project::ProjectSlug;
     use cache_core::storage::{LocalBackendName, PathObjectKind};
@@ -132,7 +148,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gc_deletes_unreachable_local_object() {
+    async fn default_gc_grace_marks_but_does_not_delete() {
+        let (db, backends, _tmp) = setup().await;
+        let backend = backends.require(&LocalBackendName::fs()).unwrap();
+
+        backend
+            .put_bytes("nar/stale.nar.zst", Bytes::from_static(b"dead"))
+            .await
+            .unwrap();
+
+        let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
+        db.upsert_local_object(
+            "nar/stale.nar.zst",
+            &metadata,
+            &LocalBackendName::fs(),
+            "nar/stale.nar.zst",
+        )
+        .await
+        .unwrap();
+
+        let gc = GcService::new(db.clone(), backends.clone());
+        let result = gc.run_local_gc(false).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert!(
+            db.get_local_object("nar/stale.nar.zst")
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let ready = db.list_local_objects_ready_for_deletion(0).await.unwrap();
+        assert_eq!(ready, vec!["nar/stale.nar.zst".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn gc_deletes_unreachable_local_object_when_grace_is_zero() {
         let (db, backends, tmp) = setup().await;
 
         let backend = backends.require(&LocalBackendName::fs()).unwrap();
@@ -152,7 +203,7 @@ mod tests {
         .unwrap();
 
         let gc = GcService::new(db.clone(), backends.clone());
-        let result = gc.run_local_gc(false).await.unwrap();
+        let result = gc.run_local_gc_with_grace_period(false, 0).await.unwrap();
 
         assert_eq!(result.deleted_count, 1);
         assert!(
@@ -175,7 +226,7 @@ mod tests {
         let store_path_hash = StorePathHash::parse_from_store_path(store_path).unwrap();
         let object_path = "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst";
 
-        let narinfo = cache_core::narinfo::NarInfo {
+        let narinfo = NarInfo {
             store_path: store_path.to_owned(),
             url: object_path.to_owned(),
             compression: "zstd".to_owned(),

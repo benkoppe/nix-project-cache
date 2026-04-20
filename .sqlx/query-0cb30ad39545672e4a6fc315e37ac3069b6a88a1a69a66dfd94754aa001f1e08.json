@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE local_objects\n            SET\n                deleted_at = '2026-04-20T00:00:00.000Z',\n                first_deleted_at = '2026-04-20T00:00:00.000Z'\n            WHERE object_path = 'nar/test.nar.zst'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "0cb30ad39545672e4a6fc315e37ac3069b6a88a1a69a66dfd94754aa001f1e08"
+}

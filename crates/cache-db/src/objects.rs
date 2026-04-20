@@ -83,7 +83,9 @@ impl SqliteDatabase {
                 etag = excluded.etag,
                 last_modified = excluded.last_modified,
                 storage_backend = excluded.storage_backend,
-                storage_key = excluded.storage_key
+                storage_key = excluded.storage_key,
+                deleted_at = NULL,
+                first_deleted_at = NULL
             "#,
             object_path,
             content_type,

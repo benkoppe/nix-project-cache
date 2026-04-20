@@ -176,6 +176,141 @@ impl SqliteDatabase {
         Ok(rows.into_iter().map(|row| row.object_path).collect())
     }
 
+    pub async fn clear_deleted_state_for_live_local_objects(&self) -> Result<()> {
+        sqlx::query!(
+            r#"
+            WITH RECURSIVE live_paths(store_path_hash, store_path) AS (
+                SELECT DISTINCT
+                    pi.store_path_hash,
+                    pi.store_path
+                FROM path_infos pi
+                WHERE pi.store_path_hash IN (
+                    SELECT bp.store_path_hash
+                    FROM project_refs pr
+                    JOIN build_paths bp ON bp.build_id = pr.build_id
+
+                    UNION
+
+                    SELECT pins.store_path_hash
+                    FROM pins
+                )
+
+                UNION
+
+                SELECT DISTINCT
+                    ref_pi.store_path_hash,
+                    ref_pi.store_path
+                FROM live_paths lp
+                JOIN path_references pr
+                    ON pr.store_path_hash = lp.store_path_hash
+                JOIN path_infos ref_pi
+                    ON ref_pi.store_path = pr.reference_store_path
+            ),
+            live_objects AS (
+                SELECT DISTINCT po.object_path
+                FROM live_paths lp
+                JOIN path_objects po ON po.store_path_hash = lp.store_path_hash
+            )
+            UPDATE local_objects
+            SET
+                deleted_at = NULL,
+                first_deleted_at = NULL
+            WHERE (deleted_at IS NOT NULL OR first_deleted_at IS NOT NULL)
+            AND EXISTS (
+                SELECT 1
+                FROM live_objects lio
+                WHERE lio.object_path = local_objects.object_path
+            )
+            "#
+        )
+        .execute(&self.pool)
+        .await
+        .context("clearing tombstones for live local objects")?;
+
+        Ok(())
+    }
+
+    pub async fn mark_stale_local_objects(&self) -> Result<()> {
+        sqlx::query!(
+            r#"
+            WITH RECURSIVE live_paths(store_path_hash, store_path) AS (
+                SELECT DISTINCT
+                    pi.store_path_hash,
+                    pi.store_path
+                FROM path_infos pi
+                WHERE pi.store_path_hash IN (
+                    SELECT bp.store_path_hash
+                    FROM project_refs pr
+                    JOIN build_paths bp ON bp.build_id = pr.build_id
+
+                    UNION
+
+                    SELECT pins.store_path_hash
+                    FROM pins
+                )
+
+                UNION
+
+                SELECT DISTINCT
+                    ref_pi.store_path_hash,
+                    ref_pi.store_path
+                FROM live_paths lp
+                JOIN path_references pr
+                    ON pr.store_path_hash = lp.store_path_hash
+                JOIN path_infos ref_pi
+                    ON ref_pi.store_path = pr.reference_store_path
+            ),
+            live_objects AS (
+                SELECT DISTINCT po.object_path
+                FROM live_paths lp
+                JOIN path_objects po ON po.store_path_hash = lp.store_path_hash
+            )
+            UPDATE local_objects
+            SET
+                deleted_at = COALESCE(
+                    deleted_at,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                ),
+                first_deleted_at = COALESCE(
+                    first_deleted_at,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                )
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM live_objects lio
+                WHERE lio.object_path = local_objects.object_path
+            )
+            "#
+        )
+        .execute(&self.pool)
+        .await
+        .context("marking stale local objects")?;
+
+        Ok(())
+    }
+
+    pub async fn list_local_objects_ready_for_deletion(
+        &self,
+        grace_period_seconds: i64,
+    ) -> Result<Vec<String>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT object_path
+            FROM local_objects
+            WHERE deleted_at IS NOT NULL
+              AND first_deleted_at IS NOT NULL
+              AND unixepoch(first_deleted_at) <= unixepoch('now') - ?
+            ORDER BY object_path ASC
+            "#,
+            grace_period_seconds,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing local objects ready for deletion")?;
+
+        Ok(rows.into_iter().map(|row| row.object_path).collect())
+    }
+
     pub async fn delete_local_objects_by_path(&self, object_paths: &[String]) -> Result<()> {
         let mut tx = self
             .pool

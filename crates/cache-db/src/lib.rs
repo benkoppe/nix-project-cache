@@ -267,4 +267,93 @@ mod tests {
         .await
         .unwrap();
     }
+
+    #[tokio::test]
+    async fn project_pin_makes_path_visible_in_project_view() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+        let project = ProjectSlug::parse("example_repo").unwrap();
+        let narinfo = sample_narinfo();
+        let hash = sample_hash();
+
+        db.insert_project(&project, "Example Repo", true)
+            .await
+            .unwrap();
+        db.upsert_path_info(&narinfo).await.unwrap();
+        db.upsert_pin("hello-1.0", Some(&project), &hash, &narinfo.store_path)
+            .await
+            .unwrap();
+
+        assert!(
+            db.get_project_narinfo(&project, &hash)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(db.get_aggregate_narinfo(&hash).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn global_pin_makes_path_visible_in_aggregate_view() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+        let narinfo = sample_narinfo();
+        let hash = sample_hash();
+
+        db.upsert_path_info(&narinfo).await.unwrap();
+        db.upsert_pin("hello-1.0", None, &hash, &narinfo.store_path)
+            .await
+            .unwrap();
+
+        assert!(db.get_aggregate_narinfo(&hash).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn upsert_local_object_clears_tombstones() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+        let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
+
+        db.upsert_local_object(
+            "nar/test.nar.zst",
+            &metadata,
+            &LocalBackendName::fs(),
+            "nar/test.nar.zst",
+        )
+        .await
+        .unwrap();
+
+        sqlx::query!(
+            r#"
+            UPDATE local_objects
+            SET
+                deleted_at = '2026-04-20T00:00:00.000Z',
+                first_deleted_at = '2026-04-20T00:00:00.000Z'
+            WHERE object_path = 'nar/test.nar.zst'
+            "#
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        db.upsert_local_object(
+            "nar/test.nar.zst",
+            &metadata,
+            &LocalBackendName::fs(),
+            "nar/test.nar.zst",
+        )
+        .await
+        .unwrap();
+
+        let row = sqlx::query!(
+            r#"
+            SELECT deleted_at, first_deleted_at
+            FROM local_objects
+            WHERE object_path = 'nar/test.nar.zst'
+            "#
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+
+        assert!(row.deleted_at.is_none());
+        assert!(row.first_deleted_at.is_none());
+    }
 }

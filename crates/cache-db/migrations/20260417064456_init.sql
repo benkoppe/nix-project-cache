@@ -59,6 +59,8 @@ CREATE TABLE local_objects (
     last_modified TEXT NULL,
     storage_backend TEXT NOT NULL,
     storage_key TEXT NOT NULL,
+    deleted_at TEXT NULL,
+    first_deleted_at TEXT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -67,3 +69,4 @@ CREATE INDEX idx_project_upstreams_upstream_id ON project_upstreams(upstream_id)
 CREATE INDEX idx_path_references_store_path_hash ON path_references(store_path_hash);
 CREATE INDEX idx_path_signatures_store_path_hash ON path_signatures(store_path_hash);
 CREATE INDEX idx_upstream_caches_enabled_priority ON upstream_caches(enabled, priority);
+CREATE INDEX idx_local_objects_deleted_at ON local_objects(deleted_at, first_deleted_at);
