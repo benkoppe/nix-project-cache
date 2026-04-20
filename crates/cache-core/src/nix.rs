@@ -148,25 +148,7 @@ impl StorePathHash {
             .split_once('-')
             .ok_or_else(|| StorePathHashError::MissingHyphen(store_path.to_owned()))?;
 
-        if hash.len() != Self::LENGTH {
-            return Err(StorePathHashError::InvalidLength {
-                store_path: store_path.to_owned(),
-                actual: hash.len(),
-                expected: Self::LENGTH,
-            });
-        }
-
-        for (position, character) in hash.chars().enumerate() {
-            if !NIX_BASE32_ALPHABET.contains(&(character as u8)) {
-                return Err(StorePathHashError::InvalidCharacter {
-                    store_path: store_path.to_owned(),
-                    character,
-                    position,
-                });
-            }
-        }
-
-        Ok(Self(hash.to_owned()))
+        Self::from_hash(hash)
     }
 
     pub fn as_str(&self) -> &str {
@@ -175,6 +157,28 @@ impl StorePathHash {
 
     pub fn into_string(self) -> String {
         self.0
+    }
+
+    pub fn from_hash(hash: &str) -> Result<Self, StorePathHashError> {
+        if hash.len() != Self::LENGTH {
+            return Err(StorePathHashError::InvalidLength {
+                store_path: hash.to_owned(),
+                actual: hash.len(),
+                expected: Self::LENGTH,
+            });
+        }
+
+        for (position, character) in hash.chars().enumerate() {
+            if !NIX_BASE32_ALPHABET.contains(&(character as u8)) {
+                return Err(StorePathHashError::InvalidCharacter {
+                    store_path: hash.to_owned(),
+                    character,
+                    position,
+                });
+            }
+        }
+
+        Ok(Self(hash.to_owned()))
     }
 }
 
