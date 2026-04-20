@@ -8,7 +8,7 @@ mod pool;
 mod projects;
 mod upstreams;
 
-pub use models::{BuildContextRecord, BuildRecord, BuildStatus};
+pub use models::{BuildContextRecord, BuildRecord, BuildStatus, PinRecord, ProjectRecord};
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;
 

@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{post, put};
+use axum::routing::{delete, get, post, put};
 
 use crate::handlers;
 use crate::state::WriteAppState;
@@ -19,5 +19,11 @@ pub fn write_router(state: WriteAppState) -> Router {
             "/api/builds/{build_id}/finalize",
             post(handlers::finalize_build),
         )
+        .route("/api/pins", get(handlers::list_pins))
+        .route("/api/pins/{name}", post(handlers::create_pin))
+        .route("/api/pins/{name}", delete(handlers::delete_pin))
+        .route("/api/gc", post(handlers::run_gc))
+        .route("/api/projects", get(handlers::list_projects))
+        .route("/api/projects", post(handlers::upsert_project))
         .with_state(state)
 }

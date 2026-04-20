@@ -62,6 +62,29 @@ impl SqliteDatabase {
         row.map(ProjectLookupRow::into_record).transpose()
     }
 
+    pub async fn list_projects(&self) -> Result<Vec<ProjectRecord>> {
+        let rows = sqlx::query_as!(
+            ProjectLookupRow,
+            r#"
+            SELECT
+                id,
+                slug,
+                display_name,
+                public,
+                created_at
+            FROM projects
+            ORDER BY slug ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing projects")?;
+
+        rows.into_iter()
+            .map(ProjectLookupRow::into_record)
+            .collect()
+    }
+
     pub(crate) async fn project_id_by_slug(&self, slug: &ProjectSlug) -> Result<String> {
         let slug_text = slug.as_str();
 

@@ -10,7 +10,7 @@ use cache_auth::StaticTokenAuthorizer;
 use cache_core::narinfo::NarInfoRenderer;
 use cache_core::signing::NarInfoSigner;
 use cache_db::SqliteDatabase;
-use cache_ingest::IngestService;
+use cache_ingest::{GcService, IngestService};
 use cache_read::{
     DbBackedLocalObjectStore, DbNarInfoResolver, DbUpstreamSelector, ReadAppState, ReadService,
     read_router,
@@ -55,14 +55,18 @@ async fn main() -> anyhow::Result<()> {
     let ingest_service = IngestService::new(
         db.clone(),
         Arc::new(local_objects),
-        local_backends,
+        local_backends.clone(),
         config.writable_local_backend.clone(),
         upstream_client,
     );
 
+    let gc_service = GcService::new(db.clone(), local_backends);
+
     let read_state = ReadAppState::new(Arc::new(read_service), 30);
     let write_state = WriteAppState::new(
+        db.clone(),
         Arc::new(ingest_service),
+        Arc::new(gc_service),
         Arc::new(StaticTokenAuthorizer::new(config.write_token.clone())),
     );
 
