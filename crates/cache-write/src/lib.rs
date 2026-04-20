@@ -45,7 +45,7 @@ mod tests {
 
         let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(&objects_root));
         let mut backends = LocalObjectBackendRegistry::new();
-        backends.register(LocalBackendName::fs().as_str(), fs_backend);
+        backends.register(LocalBackendName::fs(), fs_backend);
 
         let ingest_service = IngestService::new(
             db,

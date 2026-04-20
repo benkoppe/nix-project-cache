@@ -12,7 +12,7 @@ use crate::pool::SqliteDatabase;
 #[derive(Debug, Clone)]
 pub struct LocalObjectRecord {
     pub metadata: BlobMetadata,
-    pub storage_backend: String,
+    pub storage_backend: LocalBackendName,
     pub storage_key: String,
 }
 
@@ -35,7 +35,9 @@ impl LocalObjectLookupRow {
                 self.etag,
                 last_modified,
             ),
-            storage_backend: self.storage_backend,
+            storage_backend: LocalBackendName::new(self.storage_backend)
+                .map_err(anyhow::Error::new)
+                .context("parsing local object storage_backend")?,
             storage_key: self.storage_key,
         })
     }

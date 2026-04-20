@@ -27,6 +27,12 @@ impl LocalBackendName {
     }
 }
 
+impl std::fmt::Display for LocalBackendName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LocalBackendNameError {
     #[error("local backend name must not be empty")]

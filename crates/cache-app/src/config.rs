@@ -78,12 +78,12 @@ impl AppConfig {
             self.local_object_root.clone(),
         ));
 
-        registry.register(LocalBackendName::fs().as_str(), fs_backend.clone());
+        registry.register(LocalBackendName::fs(), fs_backend.clone());
 
         if let Some(name) = &self.writable_local_backend
             && name.as_str() != LocalBackendName::fs().as_str()
         {
-            registry.register(name.as_str(), fs_backend);
+            registry.register(name.clone(), fs_backend);
         }
 
         registry

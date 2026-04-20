@@ -166,7 +166,7 @@ mod tests {
 
         assert_eq!(loaded.metadata.content_type, "application/octet-stream");
         assert_eq!(loaded.metadata.content_length, Some(9));
-        assert_eq!(loaded.storage_backend, backend_name.as_str());
+        assert_eq!(loaded.storage_backend, backend_name);
         assert_eq!(loaded.storage_key, "objects/020a");
     }
 

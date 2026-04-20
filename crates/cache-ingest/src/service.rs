@@ -161,7 +161,7 @@ impl IngestService {
                 build_id
             )
         })?;
-        let backend = self.local_backends.require(backend_name.as_str())?;
+        let backend = self.local_backends.require(backend_name)?;
         backend.put_bytes(object_path, body.clone()).await?;
 
         let metadata = BlobMetadata::new(
@@ -330,7 +330,7 @@ mod tests {
 
         let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(&objects_root));
         let mut backends = LocalObjectBackendRegistry::new();
-        backends.register(LocalBackendName::fs().as_str(), fs_backend);
+        backends.register(LocalBackendName::fs(), fs_backend);
 
         let local_store = DbBackedLocalObjectStore::new(db.clone(), backends.clone());
 

@@ -111,7 +111,7 @@ mod tests {
 
         let mut backends = LocalObjectBackendRegistry::new();
         backends.register(
-            backend_name.as_str(),
+            backend_name.clone(),
             std::sync::Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
         );
 
@@ -145,7 +145,7 @@ mod tests {
 
         let mut backends = LocalObjectBackendRegistry::new();
         backends.register(
-            backend_name.as_str(),
+            backend_name.clone(),
             std::sync::Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
         );
 

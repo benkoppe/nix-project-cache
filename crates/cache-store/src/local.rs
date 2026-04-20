@@ -7,6 +7,8 @@ use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use tokio::fs;
 
+use cache_core::storage::LocalBackendName;
+
 use crate::blob::{BlobBytes, BlobMetadata};
 
 #[async_trait]
@@ -24,7 +26,7 @@ pub trait LocalObjectBackend: Send + Sync + 'static {
 
 #[derive(Clone, Default)]
 pub struct LocalObjectBackendRegistry {
-    backends: HashMap<String, Arc<dyn LocalObjectBackend>>,
+    backends: HashMap<LocalBackendName, Arc<dyn LocalObjectBackend>>,
 }
 
 impl LocalObjectBackendRegistry {
@@ -34,17 +36,17 @@ impl LocalObjectBackendRegistry {
 
     pub fn register(
         &mut self,
-        backend_name: impl Into<String>,
+        backend_name: LocalBackendName,
         backend: Arc<dyn LocalObjectBackend>,
     ) -> Option<Arc<dyn LocalObjectBackend>> {
-        self.backends.insert(backend_name.into(), backend)
+        self.backends.insert(backend_name, backend)
     }
 
-    pub fn get(&self, backend_name: &str) -> Option<Arc<dyn LocalObjectBackend>> {
+    pub fn get(&self, backend_name: &LocalBackendName) -> Option<Arc<dyn LocalObjectBackend>> {
         self.backends.get(backend_name).cloned()
     }
 
-    pub fn require(&self, backend_name: &str) -> Result<Arc<dyn LocalObjectBackend>> {
+    pub fn require(&self, backend_name: &LocalBackendName) -> Result<Arc<dyn LocalObjectBackend>> {
         self.get(backend_name)
             .ok_or_else(|| anyhow!("no local object backend registered for {}", backend_name))
     }
@@ -172,8 +174,11 @@ impl LocalObjectStore for InMemoryLocalObjectStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use cache_core::storage::LocalBackendName;
+
+    use super::*;
 
     #[tokio::test]
     async fn filesystem_backend_reads_existing_bytes() {
@@ -263,9 +268,13 @@ mod tests {
         let backend = std::sync::Arc::new(FilesystemLocalObjectBackend::new(temp_dir.path()));
         let mut registry = LocalObjectBackendRegistry::new();
 
-        registry.register("fs", backend);
+        registry.register(LocalBackendName::fs(), backend);
 
-        assert!(registry.require("fs").is_ok());
-        assert!(registry.require("missing").is_err());
+        assert!(registry.require(&LocalBackendName::fs()).is_ok());
+        assert!(
+            registry
+                .require(&LocalBackendName::new("missing").unwrap())
+                .is_err()
+        );
     }
 }
