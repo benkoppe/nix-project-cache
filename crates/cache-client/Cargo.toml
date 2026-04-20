@@ -1,0 +1,19 @@
+[package]
+name = "cache-client"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+cache-api = { path = "../cache-api" }
+cache-core = { path = "../cache-core" }
+bytes.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serde_json.workspace = true

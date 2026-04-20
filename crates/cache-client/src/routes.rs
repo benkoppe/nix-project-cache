@@ -1,0 +1,78 @@
+use reqwest::Url;
+
+use cache_core::nix::StorePathHash;
+use cache_core::project::ProjectSlug;
+
+use crate::error::CacheClientError;
+
+pub fn begin_build(base_url: &Url) -> Result<Url, CacheClientError> {
+    join(base_url, "api/builds")
+}
+
+pub fn register_paths(base_url: &Url, build_id: &str) -> Result<Url, CacheClientError> {
+    join(base_url, &format!("api/builds/{build_id}/paths"))
+}
+
+pub fn finalize_build(base_url: &Url, build_id: &str) -> Result<Url, CacheClientError> {
+    join(base_url, &format!("api/builds/{build_id}/finalize"))
+}
+
+pub fn upload_object(
+    base_url: &Url,
+    build_id: &str,
+    store_path_hash: &StorePathHash,
+    object_path: &str,
+) -> Result<Url, CacheClientError> {
+    let prefix = format!(
+        "api/builds/{build_id}/paths/{}/objects/",
+        store_path_hash.as_str()
+    );
+
+    join(base_url, &format!("{prefix}{object_path}"))
+}
+
+pub fn list_pins(base_url: &Url, project: Option<&ProjectSlug>) -> Result<Url, CacheClientError> {
+    let mut url = join(base_url, "api/pins")?;
+    if let Some(project) = project {
+        url.query_pairs_mut()
+            .append_pair("project", project.as_str());
+    }
+    Ok(url)
+}
+
+pub fn create_pin(base_url: &Url, name: &str) -> Result<Url, CacheClientError> {
+    join(base_url, &format!("api/pins/{name}"))
+}
+
+pub fn delete_pin(
+    base_url: &Url,
+    name: &str,
+    project: Option<&ProjectSlug>,
+) -> Result<Url, CacheClientError> {
+    let mut url = join(base_url, &format!("api/pins/{name}"))?;
+    if let Some(project) = project {
+        url.query_pairs_mut()
+            .append_pair("project", project.as_str());
+    }
+    Ok(url)
+}
+
+pub fn run_gc(base_url: &Url) -> Result<Url, CacheClientError> {
+    join(base_url, "api/gc")
+}
+
+pub fn list_projects(base_url: &Url) -> Result<Url, CacheClientError> {
+    join(base_url, "api/projects")
+}
+
+pub fn upsert_project(base_url: &Url) -> Result<Url, CacheClientError> {
+    join(base_url, "api/projects")
+}
+
+fn join(base_url: &Url, path: &str) -> Result<Url, CacheClientError> {
+    base_url
+        .join(path)
+        .map_err(|error| CacheClientError::InvalidEndpointUrl {
+            message: format!("base={} path={} error={}", base_url.as_str(), path, error),
+        })
+}

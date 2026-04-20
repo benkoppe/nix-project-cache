@@ -4,6 +4,7 @@ members = [
   "crates/cache-api",
   "crates/cache-app",
   "crates/cache-auth",
+  "crates/cache-client",
   "crates/cache-core",
   "crates/cache-db",
   "crates/cache-ingest",
@@ -22,6 +23,8 @@ futures-util = "0.3"
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "http2",
+  "json",
+  "stream",
 ] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
