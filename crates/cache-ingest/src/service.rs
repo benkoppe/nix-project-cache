@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
-use bytes::Bytes;
 use uuid::Uuid;
 
 use cache_api::{
@@ -14,7 +13,7 @@ use cache_core::project::ProjectSlug;
 use cache_core::storage::{LocalBackendName, PathObjectKind};
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
-use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore};
+use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore, LocalUploadReader};
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
 
 use crate::planner::plan_required_uploads;
@@ -114,7 +113,7 @@ impl IngestService {
         build_id: Uuid,
         store_path_hash: &StorePathHash,
         object_path: &str,
-        body: Bytes,
+        body: LocalUploadReader,
     ) -> Result<()> {
         let build_context = self
             .db
@@ -162,14 +161,9 @@ impl IngestService {
             )
         })?;
         let backend = self.local_backends.require(backend_name)?;
-        backend.put_bytes(object_path, body.clone()).await?;
+        let written = backend.put_stream(object_path, body).await?;
 
-        let metadata = BlobMetadata::new(
-            "application/octet-stream",
-            Some(u64::try_from(body.len()).context("converting body length")?),
-            None,
-            None,
-        );
+        let metadata = BlobMetadata::new("application/octet-stream", Some(written), None, None);
 
         self.db
             .upsert_local_object(object_path, &metadata, backend_name, object_path)
@@ -274,8 +268,8 @@ impl IngestService {
 mod tests {
     use std::sync::Arc;
 
-    use bytes::Bytes;
     use tempfile::TempDir;
+    use tokio::io::AsyncWriteExt as _;
     use uuid::Uuid;
 
     use cache_api::{BeginBuildRequest, NarInfoPayload, RegisterPathsRequest};
@@ -284,7 +278,7 @@ mod tests {
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_read::DbBackedLocalObjectStore;
-    use cache_store::blob::BlobMetadata;
+    use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
     use cache_store::upstream::{InMemoryUpstreamCacheClient, UpstreamCache};
 
@@ -312,6 +306,17 @@ mod tests {
             "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1",
         )
         .unwrap()
+    }
+
+    fn stream_reader(bytes: &'static [u8]) -> LocalUploadReader {
+        let (mut writer, reader) = tokio::io::duplex(bytes.len().max(1));
+
+        tokio::spawn(async move {
+            writer.write_all(bytes).await.unwrap();
+            writer.shutdown().await.unwrap();
+        });
+
+        Box::pin(reader)
     }
 
     async fn build_service(
@@ -379,12 +384,7 @@ mod tests {
         assert_eq!(register.required_uploads[0].object_path, payload.url);
 
         service
-            .upload_object(
-                build_id,
-                &hash,
-                &payload.url,
-                Bytes::from_static(b"nar-bytes"),
-            )
+            .upload_object(build_id, &hash, &payload.url, stream_reader(b"nar-bytes"))
             .await
             .unwrap();
 
@@ -461,7 +461,7 @@ mod tests {
             upstream.id,
             payload.url.clone(),
             BlobMetadata::new("application/octet-stream", Some(12), None, None),
-            Bytes::from_static(b"upstream-nar"),
+            BlobBytes::from_static(b"upstream-nar"),
         );
 
         let (service, db, _tmp) = build_service(upstream_client, None).await;

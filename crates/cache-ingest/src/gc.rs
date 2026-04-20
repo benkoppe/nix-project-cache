@@ -81,7 +81,6 @@ impl GcService {
 mod tests {
     use std::sync::Arc;
 
-    use bytes::Bytes;
     use tempfile::tempdir;
 
     use cache_core::narinfo::NarInfo;
@@ -89,7 +88,7 @@ mod tests {
     use cache_core::project::ProjectSlug;
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::SqliteDatabase;
-    use cache_store::blob::BlobMetadata;
+    use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::local::{
         FilesystemLocalObjectBackend, LocalObjectBackend, LocalObjectBackendRegistry,
     };
@@ -153,7 +152,7 @@ mod tests {
         let backend = backends.require(&LocalBackendName::fs()).unwrap();
 
         backend
-            .put_bytes("nar/stale.nar.zst", Bytes::from_static(b"dead"))
+            .put_bytes("nar/stale.nar.zst", BlobBytes::from_static(b"dead"))
             .await
             .unwrap();
 
@@ -188,7 +187,7 @@ mod tests {
 
         let backend = backends.require(&LocalBackendName::fs()).unwrap();
         backend
-            .put_bytes("nar/stale.nar.zst", Bytes::from_static(b"dead"))
+            .put_bytes("nar/stale.nar.zst", BlobBytes::from_static(b"dead"))
             .await
             .unwrap();
 
@@ -242,7 +241,7 @@ mod tests {
 
         db.upsert_path_info(&narinfo).await.unwrap();
         backend
-            .put_bytes(object_path, Bytes::from_static(b"live"))
+            .put_bytes(object_path, BlobBytes::from_static(b"live"))
             .await
             .unwrap();
 

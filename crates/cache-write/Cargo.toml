@@ -9,6 +9,9 @@ cache-core = { path = "../cache-core" }
 cache-auth = { path = "../cache-auth" }
 cache-ingest = { path = "../cache-ingest" }
 axum.workspace = true
+futures-util.workspace = true
+http-body-util.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
@@ -17,7 +20,6 @@ cache-core = { path = "../cache-core" }
 cache-db = { path = "../cache-db" }
 cache-store = { path = "../cache-store" }
 bytes.workspace = true
-http-body-util.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

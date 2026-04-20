@@ -1,8 +1,10 @@
+use std::io;
+
 use axum::Json;
-use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
@@ -53,10 +55,9 @@ pub async fn register_paths(
 pub async fn upload_object(
     Path((build_id, store_path_hash, object_path)): Path<(String, String, String)>,
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, request.headers()) {
         return error.into_response();
     }
 
@@ -69,9 +70,15 @@ pub async fn upload_object(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
+    let body_stream = futures_util::TryStreamExt::map_err(
+        request.into_body().into_data_stream(),
+        io::Error::other,
+    );
+    let body_reader = Box::pin(StreamReader::new(body_stream));
+
     match state
         .ingest_service
-        .upload_object(build_id, &store_path_hash, &object_path, body)
+        .upload_object(build_id, &store_path_hash, &object_path, body_reader)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
