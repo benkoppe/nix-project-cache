@@ -17,6 +17,7 @@ mod tests {
     use cache_core::narinfo::NarInfo;
     use cache_core::nix::{NixHash, StorePathHash};
     use cache_core::project::ProjectSlug;
+    use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_store::blob::BlobMetadata;
     use cache_store::upstream::UpstreamCache;
 
@@ -146,10 +147,12 @@ mod tests {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
+        let backend_name = LocalBackendName::fs();
+
         db.upsert_local_object(
             "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
             &metadata,
-            "fs",
+            &backend_name,
             "objects/020a",
         )
         .await
@@ -163,7 +166,7 @@ mod tests {
 
         assert_eq!(loaded.metadata.content_type, "application/octet-stream");
         assert_eq!(loaded.metadata.content_length, Some(9));
-        assert_eq!(loaded.storage_backend, "fs");
+        assert_eq!(loaded.storage_backend, backend_name.as_str());
         assert_eq!(loaded.storage_key, "objects/020a");
     }
 
@@ -243,10 +246,12 @@ mod tests {
         db.upsert_path_info(&narinfo).await.unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
+        let backend_name = LocalBackendName::fs();
+
         db.upsert_local_object(
             "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
             &metadata,
-            "fs",
+            &backend_name,
             "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
         )
         .await
@@ -255,7 +260,7 @@ mod tests {
         db.link_path_object(
             &hash,
             "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-            "nar",
+            PathObjectKind::Nar,
         )
         .await
         .unwrap();

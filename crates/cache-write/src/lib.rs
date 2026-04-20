@@ -20,6 +20,7 @@ mod tests {
     use cache_api::BeginBuildResponse;
     use cache_auth::StaticTokenAuthorizer;
     use cache_core::project::ProjectSlug;
+    use cache_core::storage::LocalBackendName;
     use cache_db::SqliteDatabase;
     use cache_ingest::IngestService;
     use cache_store::local::{
@@ -44,12 +45,13 @@ mod tests {
 
         let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(&objects_root));
         let mut backends = LocalObjectBackendRegistry::new();
-        backends.register("fs", fs_backend);
+        backends.register(LocalBackendName::fs().as_str(), fs_backend);
 
         let ingest_service = IngestService::new(
             db,
             Arc::new(InMemoryLocalObjectStore::new()),
             backends,
+            Some(LocalBackendName::fs()),
             Arc::new(InMemoryUpstreamCacheClient::new()),
         );
 

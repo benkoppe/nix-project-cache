@@ -11,6 +11,7 @@ use cache_api::{
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
+use cache_core::storage::{LocalBackendName, PathObjectKind};
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
 use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore};
@@ -23,6 +24,7 @@ pub struct IngestService {
     db: SqliteDatabase,
     local_store: Arc<dyn LocalObjectStore>,
     local_backends: LocalObjectBackendRegistry,
+    writable_local_backend: Option<LocalBackendName>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
 }
 
@@ -31,12 +33,14 @@ impl IngestService {
         db: SqliteDatabase,
         local_store: Arc<dyn LocalObjectStore>,
         local_backends: LocalObjectBackendRegistry,
+        writable_local_backend: Option<LocalBackendName>,
         upstream_client: Arc<dyn UpstreamCacheClient>,
     ) -> Self {
         Self {
             db,
             local_store,
             local_backends,
+            writable_local_backend,
             upstream_client,
         }
     }
@@ -90,6 +94,7 @@ impl IngestService {
 
         let planned = plan_required_uploads(
             self.local_store.as_ref(),
+            self.writable_local_backend.as_ref(),
             self.upstream_client.as_ref(),
             &upstreams,
             &narinfos,
@@ -150,7 +155,13 @@ impl IngestService {
             ));
         }
 
-        let backend = self.local_backends.require("fs")?;
+        let backend_name = self.writable_local_backend.as_ref().ok_or_else(|| {
+            anyhow!(
+                "build {} requires a writable local backend for uploads",
+                build_id
+            )
+        })?;
+        let backend = self.local_backends.require(backend_name.as_str())?;
         backend.put_bytes(object_path, body.clone()).await?;
 
         let metadata = BlobMetadata::new(
@@ -161,10 +172,10 @@ impl IngestService {
         );
 
         self.db
-            .upsert_local_object(object_path, &metadata, "fs", object_path)
+            .upsert_local_object(object_path, &metadata, backend_name, object_path)
             .await?;
         self.db
-            .link_path_object(store_path_hash, object_path, "nar")
+            .link_path_object(store_path_hash, object_path, PathObjectKind::Nar)
             .await?;
 
         Ok(())
@@ -195,7 +206,7 @@ impl IngestService {
         for (store_path_hash, object_path) in build_paths {
             let locally_available = self
                 .db
-                .path_has_object(&store_path_hash, &object_path, "nar")
+                .path_has_object(&store_path_hash, &object_path, PathObjectKind::Nar)
                 .await?
                 && self.local_store.head(&object_path).await?.is_some();
 
@@ -270,6 +281,7 @@ mod tests {
     use cache_api::{BeginBuildRequest, NarInfoPayload, RegisterPathsRequest};
     use cache_core::nix::{NixHash, StorePathHash};
     use cache_core::project::ProjectSlug;
+    use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_read::DbBackedLocalObjectStore;
     use cache_store::blob::BlobMetadata;
@@ -304,6 +316,7 @@ mod tests {
 
     async fn build_service(
         upstream_client: InMemoryUpstreamCacheClient,
+        writable_local_backend: Option<LocalBackendName>,
     ) -> (IngestService, SqliteDatabase, TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("cache.db");
@@ -317,7 +330,7 @@ mod tests {
 
         let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(&objects_root));
         let mut backends = LocalObjectBackendRegistry::new();
-        backends.register("fs", fs_backend);
+        backends.register(LocalBackendName::fs().as_str(), fs_backend);
 
         let local_store = DbBackedLocalObjectStore::new(db.clone(), backends.clone());
 
@@ -325,6 +338,7 @@ mod tests {
             db.clone(),
             Arc::new(local_store),
             backends,
+            writable_local_backend,
             Arc::new(upstream_client),
         );
 
@@ -333,7 +347,11 @@ mod tests {
 
     #[tokio::test]
     async fn upload_links_path_object_and_finalize_succeeds() {
-        let (service, db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
+        let (service, db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
         let payload = sample_payload();
         let hash = sample_hash();
 
@@ -371,7 +389,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            db.path_has_object(&hash, &payload.url, "nar")
+            db.path_has_object(&hash, &payload.url, PathObjectKind::Nar)
                 .await
                 .unwrap()
         );
@@ -389,7 +407,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_rejects_missing_required_nar() {
-        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
         let payload = sample_payload();
 
         let begin = service
@@ -442,7 +464,7 @@ mod tests {
             Bytes::from_static(b"upstream-nar"),
         );
 
-        let (service, db, _tmp) = build_service(upstream_client).await;
+        let (service, db, _tmp) = build_service(upstream_client, None).await;
         let project = ProjectSlug::parse("example_repo").unwrap();
 
         db.insert_upstream_cache(&upstream, true).await.unwrap();
@@ -475,7 +497,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            !db.path_has_object(&hash, &payload.url, "nar")
+            !db.path_has_object(&hash, &payload.url, PathObjectKind::Nar)
                 .await
                 .unwrap()
         );
@@ -483,5 +505,33 @@ mod tests {
         let build_id = Uuid::parse_str(&begin.build_id).unwrap();
         let build = db.get_build(build_id).await.unwrap().unwrap();
         assert_eq!(build.status, BuildStatus::Finalized);
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_required_upload_when_no_writable_backend_is_configured() {
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new(), None).await;
+
+        let begin = service
+            .begin_build(BeginBuildRequest {
+                project: "example_repo".to_owned(),
+                ref_name: "main".to_owned(),
+                revision: None,
+            })
+            .await
+            .unwrap();
+
+        let error = service
+            .register_paths(RegisterPathsRequest {
+                build_id: begin.build_id,
+                paths: vec![sample_payload()],
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("no writable local backend is configured")
+        )
     }
 }

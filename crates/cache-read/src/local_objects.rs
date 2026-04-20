@@ -77,6 +77,7 @@ mod tests {
     use tempfile::tempdir;
     use tokio::fs;
 
+    use cache_core::storage::LocalBackendName;
     use cache_store::blob::BlobMetadata;
     use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
 
@@ -97,13 +98,20 @@ mod tests {
         fs::write(&file_path, b"local-bytes").await.unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(11), None, None);
-        db.upsert_local_object("nar/test.nar", &metadata, "fs", "objects/nar/test.nar")
-            .await
-            .unwrap();
+        let backend_name = LocalBackendName::fs();
+
+        db.upsert_local_object(
+            "nar/test.nar",
+            &metadata,
+            &backend_name,
+            "objects/nar/test.nar",
+        )
+        .await
+        .unwrap();
 
         let mut backends = LocalObjectBackendRegistry::new();
         backends.register(
-            "fs",
+            backend_name.as_str(),
             std::sync::Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
         );
 
@@ -124,13 +132,20 @@ mod tests {
         let db = SqliteDatabase::open(&db_path).await.unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(11), None, None);
-        db.upsert_local_object("nar/test.nar", &metadata, "fs", "objects/nar/test.nar")
-            .await
-            .unwrap();
+        let backend_name = LocalBackendName::fs();
+
+        db.upsert_local_object(
+            "nar/test.nar",
+            &metadata,
+            &backend_name,
+            "objects/nar/test.nar",
+        )
+        .await
+        .unwrap();
 
         let mut backends = LocalObjectBackendRegistry::new();
         backends.register(
-            "fs",
+            backend_name.as_str(),
             std::sync::Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
         );
 

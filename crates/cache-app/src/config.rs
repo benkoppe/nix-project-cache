@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 
 use cache_core::nix::StoreDir;
 use cache_core::signing::NamedSigningKey;
+use cache_core::storage::LocalBackendName;
 use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
 
 #[derive(Clone)]
@@ -16,6 +17,7 @@ pub struct AppConfig {
     pub local_object_root: PathBuf,
     pub signing_keys: Vec<NamedSigningKey>,
     pub write_token: Option<String>,
+    pub writable_local_backend: Option<LocalBackendName>,
 }
 
 impl AppConfig {
@@ -49,6 +51,16 @@ impl AppConfig {
 
         let write_token = env::var("CACHE_WRITE_TOKEN").ok();
 
+        let writable_local_backend = match env::var("CACHE_WRITABLE_LOCAL_BACKEND") {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => Some(
+                LocalBackendName::new(value.trim())
+                    .map_err(anyhow::Error::new)
+                    .context("parsing CACHE_WRITABLE_LOCAL_BACKEND")?,
+            ),
+            Err(_) => Some(LocalBackendName::fs()),
+        };
+
         Ok(Self {
             bind_address,
             db_path,
@@ -56,17 +68,24 @@ impl AppConfig {
             local_object_root,
             signing_keys,
             write_token,
+            writable_local_backend,
         })
     }
 
     pub fn local_object_backends(&self) -> LocalObjectBackendRegistry {
         let mut registry = LocalObjectBackendRegistry::new();
-        registry.register(
-            "fs",
-            Arc::new(FilesystemLocalObjectBackend::new(
-                self.local_object_root.clone(),
-            )),
-        );
+        let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(
+            self.local_object_root.clone(),
+        ));
+
+        registry.register(LocalBackendName::fs().as_str(), fs_backend.clone());
+
+        if let Some(name) = &self.writable_local_backend
+            && name.as_str() != LocalBackendName::fs().as_str()
+        {
+            registry.register(name.as_str(), fs_backend);
+        }
+
         registry
     }
 }

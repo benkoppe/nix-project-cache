@@ -1,9 +1,10 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 
 use cache_api::RequiredUpload;
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
+use cache_core::storage::LocalBackendName;
 use cache_store::local::LocalObjectStore;
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
 
@@ -30,6 +31,7 @@ impl PlannedUpload {
 
 pub async fn plan_required_uploads(
     local_store: &dyn LocalObjectStore,
+    writable_local_backend: Option<&LocalBackendName>,
     upstream_client: &dyn UpstreamCacheClient,
     upstreams: &[UpstreamCache],
     narinfos: &[NarInfo],
@@ -67,10 +69,17 @@ pub async fn plan_required_uploads(
             continue;
         }
 
+        let backend = writable_local_backend.ok_or_else(|| {
+            anyhow!(
+                "local upload required for {} but no writable local backend is configured",
+                object_path
+            )
+        })?;
+
         planned.push(PlannedUpload {
             store_path_hash,
             object_path: object_path.clone(),
-            storage_backend: "fs".to_owned(),
+            storage_backend: backend.as_str().to_owned(),
             storage_key: object_path,
             content_type: "application/octet-stream".to_owned(),
         });

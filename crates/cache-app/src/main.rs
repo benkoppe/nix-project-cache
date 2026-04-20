@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         Arc::new(local_objects),
         local_backends,
+        config.writable_local_backend.clone(),
         upstream_client,
     );
 

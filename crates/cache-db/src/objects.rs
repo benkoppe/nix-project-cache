@@ -3,6 +3,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cache_core::nix::StorePathHash;
+use cache_core::storage::{LocalBackendName, PathObjectKind};
 use cache_store::blob::BlobMetadata;
 
 use crate::models::LocalObjectLookupRow;
@@ -45,7 +46,7 @@ impl SqliteDatabase {
         &self,
         object_path: &str,
         metadata: &BlobMetadata,
-        storage_backend: &str,
+        storage_backend: &LocalBackendName,
         storage_key: &str,
     ) -> Result<()> {
         let content_type = metadata.content_type.as_str();
@@ -60,6 +61,7 @@ impl SqliteDatabase {
             .map(|value| value.format(&Rfc3339))
             .transpose()
             .context("formatting last_modified")?;
+        let storage_backend_text = storage_backend.as_str();
 
         sqlx::query!(
             r#"
@@ -86,7 +88,7 @@ impl SqliteDatabase {
             content_length,
             etag,
             last_modified,
-            storage_backend,
+            storage_backend_text,
             storage_key,
         )
         .execute(&self.pool)
@@ -124,9 +126,10 @@ impl SqliteDatabase {
         &self,
         store_path_hash: &StorePathHash,
         object_path: &str,
-        kind: &str,
+        kind: PathObjectKind,
     ) -> Result<()> {
         let store_path_hash = store_path_hash.as_str();
+        let kind_text = kind.as_str();
 
         sqlx::query!(
             r#"
@@ -135,7 +138,7 @@ impl SqliteDatabase {
             "#,
             store_path_hash,
             object_path,
-            kind,
+            kind_text,
         )
         .execute(&self.pool)
         .await
@@ -148,9 +151,10 @@ impl SqliteDatabase {
         &self,
         store_path_hash: &StorePathHash,
         object_path: &str,
-        kind: &str,
+        kind: PathObjectKind,
     ) -> Result<bool> {
         let store_path_hash_text = store_path_hash.as_str();
+        let kind_text = kind.as_str();
 
         let row = sqlx::query!(
             r#"
@@ -163,7 +167,7 @@ impl SqliteDatabase {
             "#,
             store_path_hash_text,
             object_path,
-            kind,
+            kind_text,
         )
         .fetch_optional(&self.pool)
         .await
