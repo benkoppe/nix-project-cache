@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT deleted_at, first_deleted_at\n            FROM local_objects\n            WHERE object_path = 'nar/test.nar.zst'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "deleted_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "first_deleted_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "4b1b9a9e1f3fd8ed8d4e76df9d5ba1e9729568f307fb9a13b38bdcaca05d700c"
+}

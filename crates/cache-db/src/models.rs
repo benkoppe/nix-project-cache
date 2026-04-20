@@ -218,3 +218,47 @@ impl BuildContextRow {
         })
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct PinLookupRow {
+    pub scope_key: String,
+    pub name: String,
+    pub project_slug: Option<String>,
+    pub store_path_hash: String,
+    pub store_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PinRecord {
+    pub scope_key: String,
+    pub name: String,
+    pub project_slug: Option<ProjectSlug>,
+    pub store_path_hash: String,
+    pub store_path: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl PinLookupRow {
+    pub fn into_record(self) -> Result<PinRecord> {
+        Ok(PinRecord {
+            scope_key: self.scope_key,
+            name: self.name,
+            project_slug: self
+                .project_slug
+                .map(|slug| {
+                    ProjectSlug::parse(&slug)
+                        .map_err(|_| anyhow::anyhow!("invalid project slug {}", slug))
+                })
+                .transpose()?,
+            store_path_hash: self.store_path_hash,
+            store_path: self.store_path,
+            created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
+                .context("parsing pin created_at")?,
+            updated_at: OffsetDateTime::parse(&self.updated_at, &Rfc3339)
+                .context("parsing pin updated_at")?,
+        })
+    }
+}

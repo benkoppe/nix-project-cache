@@ -83,7 +83,9 @@ impl SqliteDatabase {
                 etag = excluded.etag,
                 last_modified = excluded.last_modified,
                 storage_backend = excluded.storage_backend,
-                storage_key = excluded.storage_key
+                storage_key = excluded.storage_key,
+                deleted_at = NULL,
+                first_deleted_at = NULL
             "#,
             object_path,
             content_type,
@@ -176,5 +178,20 @@ impl SqliteDatabase {
         .context("checking path object link")?;
 
         Ok(row.is_some())
+    }
+
+    pub async fn delete_local_object(&self, object_path: &str) -> Result<()> {
+        sqlx::query!(
+            r#"
+            DELETE FROM local_objects
+            WHERE object_path = ?
+            "#,
+            object_path,
+        )
+        .execute(&self.pool)
+        .await
+        .context("deleting local object")?;
+
+        Ok(())
     }
 }

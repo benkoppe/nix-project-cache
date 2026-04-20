@@ -22,6 +22,7 @@ pub trait LocalObjectBackend: Send + Sync + 'static {
     async fn contains(&self, storage_key: &str) -> Result<bool>;
     async fn get_bytes(&self, storage_key: &str) -> Result<Option<BlobBytes>>;
     async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()>;
+    async fn delete(&self, storage_key: &str) -> Result<()>;
 }
 
 #[derive(Clone, Default)]
@@ -135,6 +136,18 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
             .with_context(|| format!("renaming {} to {}", temp_path.display(), path.display()))?;
 
         Ok(())
+    }
+
+    async fn delete(&self, storage_key: &str) -> Result<()> {
+        let path = self.resolve_storage_key(storage_key)?;
+
+        match fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("deleting filesystem object {}", path.display()))
+            }
+        }
     }
 }
 

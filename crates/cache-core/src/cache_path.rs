@@ -83,7 +83,7 @@ pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
 
     if NARINFO_RE.is_match(path) {
         let hash_text = path.strip_suffix(".narinfo")?;
-        let store_path_hash = parse_store_path_hash_text(hash_text)?;
+        let store_path_hash = StorePathHash::from_hash(hash_text).ok()?;
         return Some(CacheObjectPath::NarInfo { store_path_hash });
     }
 
@@ -105,7 +105,7 @@ pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
 
     if LS_RE.is_match(path) {
         let hash_text = path.strip_suffix(".ls")?;
-        let store_path_hash = parse_store_path_hash_text(hash_text)?;
+        let store_path_hash = StorePathHash::from_hash(hash_text).ok()?;
         return Some(CacheObjectPath::Listing { store_path_hash });
     }
 
@@ -128,17 +128,9 @@ pub fn is_valid_cache_path(path: &str) -> bool {
     parse_cache_object_path(path).is_some()
 }
 
-fn parse_store_path_hash_text(hash_text: &str) -> Option<StorePathHash> {
-    StorePathHash::parse_from_store_path(&format!("{hash_text}-x")).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn store_path_hash(hash_text: &str) -> StorePathHash {
-        StorePathHash::parse_from_store_path(&format!("{hash_text}-x")).unwrap()
-    }
 
     #[test]
     fn valid_cache_paths_match_go_baseline() {
@@ -187,7 +179,8 @@ mod tests {
         assert_eq!(
             parsed,
             Some(CacheObjectPath::NarInfo {
-                store_path_hash: store_path_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13"),
+                store_path_hash: StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13")
+                    .unwrap(),
             })
         );
     }
@@ -214,7 +207,8 @@ mod tests {
         assert_eq!(
             parsed,
             Some(CacheObjectPath::Listing {
-                store_path_hash: store_path_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13"),
+                store_path_hash: StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13")
+                    .unwrap(),
             })
         );
     }
