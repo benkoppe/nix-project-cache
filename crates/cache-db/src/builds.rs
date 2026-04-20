@@ -132,6 +132,65 @@ impl SqliteDatabase {
         Ok(())
     }
 
+    pub async fn get_build_path_nar_object_path(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+    ) -> Result<Option<String>> {
+        let build_id_text = build_id.to_string();
+        let store_path_hash_text = store_path_hash.as_str();
+
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                pi.url
+            FROM build_paths bp
+            JOIN path_infos pi ON pi.store_path_hash = bp.store_path_hash
+            WHERE bp.build_id = ?
+              AND bp.store_path_hash = ?
+            LIMIT 1
+            "#,
+            build_id_text,
+            store_path_hash_text
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching build path nar object path")?;
+
+        Ok(row.map(|row| row.url))
+    }
+
+    pub async fn list_build_path_nar_objects(
+        &self,
+        build_id: Uuid,
+    ) -> Result<Vec<(StorePathHash, String)>> {
+        let build_id_text = build_id.to_string();
+
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                bp.store_path_hash,
+                pi.url
+            FROM build_paths bp
+            JOIN path_infos pi ON pi.store_path_hash = bp.store_path_hash
+            WHERE bp.build_id = ?
+            ORDER BY bp.store_path_hash ASC
+            "#,
+            build_id_text
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing build path nar objects")?;
+
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let store_path_hash = StorePathHash::from_hash(&row.store_path_hash)?;
+            result.push((store_path_hash, row.url));
+        }
+
+        Ok(result)
+    }
+
     pub async fn publish_build_to_ref(
         &self,
         project: &ProjectSlug,
@@ -184,30 +243,6 @@ impl SqliteDatabase {
         tx.commit()
             .await
             .context("committing publish_build_to_ref transaction")?;
-
-        Ok(())
-    }
-
-    pub async fn link_path_object(
-        &self,
-        store_path_hash: &StorePathHash,
-        object_path: &str,
-        kind: &str,
-    ) -> Result<()> {
-        let store_path_hash_text = store_path_hash.as_str();
-
-        sqlx::query!(
-            r#"
-            INSERT OR IGNORE INTO path_objects (store_path_hash, object_path, kind)
-            VALUES (?, ?, ?)
-            "#,
-            store_path_hash_text,
-            object_path,
-            kind,
-        )
-        .execute(&self.pool)
-        .await
-        .context("linking path object")?;
 
         Ok(())
     }

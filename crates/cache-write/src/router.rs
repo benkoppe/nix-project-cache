@@ -12,7 +12,7 @@ pub fn write_router(state: WriteAppState) -> Router {
             post(handlers::register_paths),
         )
         .route(
-            "/api/builds/{build_id}/objects/{*object_path}",
+            "/api/builds/{build_id}/paths/{store_path_hash}/objects/{*object_path}",
             put(handlers::upload_object),
         )
         .route(

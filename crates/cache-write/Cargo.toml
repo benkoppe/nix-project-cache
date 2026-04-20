@@ -5,6 +5,7 @@ version.workspace = true
 
 [dependencies]
 cache-api = { path = "../cache-api" }
+cache-core = { path = "../cache-core" }
 cache-auth = { path = "../cache-auth" }
 cache-ingest = { path = "../cache-ingest" }
 axum.workspace = true

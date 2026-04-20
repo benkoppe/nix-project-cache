@@ -250,6 +250,7 @@ dependencies = [
  "cache-api",
  "cache-core",
  "cache-db",
+ "cache-read",
  "cache-store",
  "tempfile",
  "tokio",

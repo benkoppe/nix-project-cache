@@ -14,5 +14,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+cache-read = { path = "../cache-read" }
 tempfile.workspace = true
 tokio.workspace = true

@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
 use cache_auth::{AuthError, Authorizer};
+use cache_core::nix::StorePathHash;
 
 use crate::state::WriteAppState;
 
@@ -50,7 +51,7 @@ pub async fn register_paths(
 }
 
 pub async fn upload_object(
-    Path((build_id, object_path)): Path<(String, String)>,
+    Path((build_id, store_path_hash, object_path)): Path<(String, String, String)>,
     State(state): State<WriteAppState>,
     headers: HeaderMap,
     body: Bytes,
@@ -64,9 +65,13 @@ pub async fn upload_object(
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
+    let Ok(store_path_hash) = StorePathHash::from_hash(&store_path_hash) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
     match state
         .ingest_service
-        .upload_object(build_id, &object_path, body)
+        .upload_object(build_id, &store_path_hash, &object_path, body)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),

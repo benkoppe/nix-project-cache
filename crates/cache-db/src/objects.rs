@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use cache_core::nix::StorePathHash;
 use cache_store::blob::BlobMetadata;
 
 use crate::models::LocalObjectLookupRow;
@@ -117,5 +118,57 @@ impl SqliteDatabase {
         .context("fetching local object")?;
 
         row.map(LocalObjectLookupRow::into_record).transpose()
+    }
+
+    pub async fn link_path_object(
+        &self,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        kind: &str,
+    ) -> Result<()> {
+        let store_path_hash = store_path_hash.as_str();
+
+        sqlx::query!(
+            r#"
+            INSERT OR IGNORE INTO path_objects (store_path_hash, object_path, kind)
+            VALUES (?, ?, ?)
+            "#,
+            store_path_hash,
+            object_path,
+            kind,
+        )
+        .execute(&self.pool)
+        .await
+        .context("linking path object")?;
+
+        Ok(())
+    }
+
+    pub async fn path_has_object(
+        &self,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        kind: &str,
+    ) -> Result<bool> {
+        let store_path_hash_text = store_path_hash.as_str();
+
+        let row = sqlx::query!(
+            r#"
+            SELECT 1 AS "present!: i64"
+            FROM path_objects
+            WHERE store_path_hash = ?
+              AND object_path = ?
+              AND kind = ?
+            LIMIT 1
+            "#,
+            store_path_hash_text,
+            object_path,
+            kind,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("checking path object link")?;
+
+        Ok(row.is_some())
     }
 }
