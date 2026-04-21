@@ -1,0 +1,27 @@
+[package]
+name = "cache-push"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+cache-api = { path = "../cache-api" }
+cache-client = { path = "../cache-client" }
+cache-core = { path = "../cache-core" }
+anyhow.workspace = true
+async-compression.workspace = true
+bytes.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = [
+  "process",
+  "signal",
+  "io-util",
+  "fs",
+  "sync",
+] }
+tokio-stream = "0.1"
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
