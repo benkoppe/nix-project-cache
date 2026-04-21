@@ -241,7 +241,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cache-api"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "cache-core",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "cache-app"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "cache-auth"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "cache-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "cache-db"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "cache-core",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "cache-ingest"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "cache-api",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "cache-read"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "cache-store"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
