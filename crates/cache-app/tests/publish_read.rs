@@ -4,6 +4,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use reqwest::StatusCode;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 use cache_api::BeginBuildRequest;
 use cache_app::build_app_with_parts;
@@ -14,8 +15,11 @@ use cache_core::project::ProjectSlug;
 use cache_core::signing::NamedSigningKey;
 use cache_core::storage::LocalBackendName;
 use cache_db::SqliteDatabase;
+use cache_store::blob::BlobMetadata;
 use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
-use cache_store::upstream::ReqwestUpstreamCacheClient;
+use cache_store::upstream::{
+    InMemoryUpstreamCacheClient, ReqwestUpstreamCacheClient, UpstreamCache,
+};
 
 const WRITE_TOKEN: &str = "secret-token";
 
@@ -61,6 +65,47 @@ async fn spawn_test_app() -> Result<TestApp> {
         Some(LocalBackendName::fs()),
         Some(WRITE_TOKEN.to_owned()),
         Arc::new(ReqwestUpstreamCacheClient::default()),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let join_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    Ok(TestApp {
+        base_url: format!("http://{address}"),
+        _temp_dir: temp_dir,
+        _join_handle: join_handle,
+    })
+}
+
+async fn spawn_test_app_with_prepared_upstream(
+    temp_dir: TempDir,
+    db: SqliteDatabase,
+    upstream_client: InMemoryUpstreamCacheClient,
+) -> Result<TestApp> {
+    let objects_root = temp_dir.path().join("objects");
+
+    let mut backends = LocalObjectBackendRegistry::new();
+    backends.register(
+        LocalBackendName::fs(),
+        Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
+    );
+
+    let app = build_app_with_parts(
+        db,
+        StoreDir::default(),
+        vec![
+            NamedSigningKey::parse(
+                "cache.example.com-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .unwrap(),
+        ],
+        backends,
+        Some(LocalBackendName::fs()),
+        Some(WRITE_TOKEN.to_owned()),
+        Arc::new(upstream_client),
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -314,6 +359,95 @@ async fn project_scoped_pin_keeps_old_path_visible_after_ref_advances() -> Resul
     assert_eq!(
         project_new_object.bytes().await?,
         Bytes::from_static(b"new-bytes")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_route_serves_upstream_backed_path_without_local_upload() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("cache.db");
+    let db = SqliteDatabase::open(&db_path).await?;
+
+    let project = ProjectSlug::parse("example_repo").unwrap();
+    let narinfo = narinfo_a();
+    let hash = store_path_hash(&narinfo);
+
+    let upstream = UpstreamCache::new(
+        Uuid::now_v7(),
+        "cache.nixos.org",
+        "https://cache.nixos.org",
+        10,
+    );
+
+    db.insert_project(&project, "Example Repo", true).await?;
+    db.insert_upstream_cache(&upstream, true).await?;
+    db.link_project_upstream(&project, upstream.id).await?;
+
+    let mut upstream_client = InMemoryUpstreamCacheClient::new();
+    upstream_client.insert_object(
+        upstream.id,
+        narinfo.url.clone(),
+        BlobMetadata::new("application/octet-stream", Some(12), None, None),
+        Bytes::from_static(b"upstream-nar"),
+    );
+
+    let app = spawn_test_app_with_prepared_upstream(temp_dir, db, upstream_client).await?;
+
+    let write_client = app.cache_client();
+    let read_client = app.http_client();
+
+    let begin = write_client
+        .begin_build(BeginBuildRequest {
+            project: project.as_str().to_owned(),
+            ref_name: "refs/heads/main".to_owned(),
+            revision: Some("deadbeef".to_owned()),
+        })
+        .await?;
+
+    let register = write_client
+        .register_paths(&begin.build_id, vec![narinfo.clone()])
+        .await?;
+
+    assert_eq!(register.required_uploads.len(), 0);
+
+    write_client.finalize_build(&begin.build_id).await?;
+
+    let project_narinfo = read_client
+        .get(format!(
+            "{}/p/{}/{}.narinfo",
+            app.base_url,
+            project.as_str(),
+            hash.as_str()
+        ))
+        .send()
+        .await?;
+    assert_eq!(project_narinfo.status(), StatusCode::OK);
+    assert_eq!(
+        project_narinfo
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .unwrap(),
+        "text/x-nix-narinfo"
+    );
+    let project_narinfo_body = project_narinfo.text().await?;
+    assert!(project_narinfo_body.contains(&format!("StorePath: {}", narinfo.store_path)));
+    assert!(project_narinfo_body.contains(&format!("URL: {}", narinfo.url)));
+
+    let project_object = read_client
+        .get(format!(
+            "{}/p/{}/{}",
+            app.base_url,
+            project.as_str(),
+            narinfo.url
+        ))
+        .send()
+        .await?;
+    assert_eq!(project_object.status(), StatusCode::OK);
+    assert_eq!(
+        project_object.bytes().await?,
+        Bytes::from_static(b"upstream-nar")
     );
 
     Ok(())
