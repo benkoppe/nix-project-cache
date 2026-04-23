@@ -352,15 +352,20 @@ dependencies = [
  "async-compression",
  "bytes",
  "cache-api",
+ "cache-app",
  "cache-client",
  "cache-core",
+ "cache-store",
+ "cache-test-utils",
  "clap",
+ "reqwest",
  "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]
