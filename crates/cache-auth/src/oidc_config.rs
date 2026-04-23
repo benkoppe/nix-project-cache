@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
     pub providers: BTreeMap<String, OidcProviderConfig>,
     #[serde(default)]
     pub allow_insecure: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcProviderConfig {
     pub issuer: String,
     pub audience: String,
@@ -118,7 +118,18 @@ impl OidcConfig {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
+
+    fn valid_provider(issuer: &str) -> OidcProviderConfig {
+        OidcProviderConfig {
+            issuer: issuer.to_owned(),
+            audience: "https://cache.example.com".to_owned(),
+            bound_claims: BTreeMap::new(),
+            bound_subject: Vec::new(),
+        }
+    }
 
     #[test]
     fn oidc_config_rejects_duplicate_issuers() {
@@ -126,26 +137,79 @@ mod tests {
             providers: BTreeMap::from([
                 (
                     "one".to_owned(),
-                    OidcProviderConfig {
-                        issuer: "https://issuer.example.com".to_owned(),
-                        audience: "cache".to_owned(),
-                        bound_claims: BTreeMap::new(),
-                        bound_subject: Vec::new(),
-                    },
+                    valid_provider("https://issuer.example.com"),
                 ),
                 (
                     "two".to_owned(),
-                    OidcProviderConfig {
-                        issuer: "https://issuer.example.com".to_owned(),
-                        audience: "cache".to_owned(),
-                        bound_claims: BTreeMap::new(),
-                        bound_subject: Vec::new(),
-                    },
+                    valid_provider("https://issuer.example.com"),
                 ),
             ]),
             allow_insecure: false,
         };
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn oidc_config_rejects_missing_audience() {
+        let config = OidcConfig {
+            providers: BTreeMap::from([(
+                "github".to_owned(),
+                OidcProviderConfig {
+                    issuer: "https://token.actions.githubusercontent.com".to_owned(),
+                    audience: String::new(),
+                    bound_claims: BTreeMap::new(),
+                    bound_subject: Vec::new(),
+                },
+            )]),
+            allow_insecure: false,
+        };
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn oidc_config_rejects_insecure_issuer_by_default() {
+        let config = OidcConfig {
+            providers: BTreeMap::from([(
+                "github".to_owned(),
+                valid_provider("http://token.actions.githubusercontent.com"),
+            )]),
+            allow_insecure: false,
+        };
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn oidc_config_load_from_path_round_trips() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("oidc.json");
+
+        std::fs::write(
+            &path,
+            serde_json::to_string(&OidcConfig {
+                providers: BTreeMap::from([(
+                    "github".to_owned(),
+                    OidcProviderConfig {
+                        issuer: "https://token.actions.githubusercontent.com".to_owned(),
+                        audience: "https://cache.example.com".to_owned(),
+                        bound_claims: BTreeMap::from([(
+                            "repository".to_owned(),
+                            vec!["owner/repo".to_owned()],
+                        )]),
+                        bound_subject: vec!["repo:owner/repo:*".to_owned()],
+                    },
+                )]),
+                allow_insecure: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = OidcConfig::load_from_path(&path).unwrap();
+
+        assert!(loaded.providers.contains_key("github"));
+        assert!(!loaded.allow_insecure);
     }
 }

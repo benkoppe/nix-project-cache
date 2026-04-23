@@ -191,3 +191,219 @@ fn decode_claims_unverified(token: &str) -> Result<Map<String, Value>, AuthError
 fn map_http_error(error: OidcHttpError) -> AuthError {
     AuthError::Unavailable(error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use base64::Engine as _;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+    use rsa::traits::PublicKeyParts;
+    use rsa::{RsaPrivateKey, RsaPublicKey};
+    use serde::Serialize;
+    use serde_json::json;
+
+    use crate::{OidcConfig, OidcProviderConfig, StaticOidcHttpClient};
+
+    use super::*;
+
+    const ISSUER: &str = "https://token.actions.githubusercontent.com";
+    const AUDIENCE: &str = "https://cache.example.com";
+    const DISCOVERY_URL: &str =
+        "https://token.actions.githubusercontent.com/.well-known/openid-configuration";
+    const JWKS_URL: &str = "https://token.actions.githubusercontent.com/.well-known/jwks";
+    const TEST_KID: &str = "test-kid-1";
+
+    #[derive(Debug, Serialize)]
+    struct TestClaims {
+        iss: String,
+        aud: String,
+        sub: String,
+        exp: usize,
+        nbf: usize,
+        iat: usize,
+        r#ref: String,
+        repository: String,
+        project_slug: String,
+    }
+
+    fn oidc_config() -> OidcConfig {
+        OidcConfig {
+            providers: BTreeMap::from([(
+                "github".to_owned(),
+                OidcProviderConfig {
+                    issuer: ISSUER.to_owned(),
+                    audience: AUDIENCE.to_owned(),
+                    bound_claims: BTreeMap::from([(
+                        "repository".to_owned(),
+                        vec!["owner/repo".to_owned()],
+                    )]),
+                    bound_subject: vec!["repo:owner/repo:*".to_owned()],
+                },
+            )]),
+            allow_insecure: false,
+        }
+    }
+
+    fn build_test_http_client() -> (StaticOidcHttpClient, EncodingKey) {
+        let mut rng = rsa::rand_core::OsRng;
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+
+        let private_pem = private_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap()
+            .to_string();
+
+        let n =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
+        let e =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
+
+        let discovery = json!({
+            "issuer": ISSUER,
+            "jwks_uri": JWKS_URL,
+        });
+
+        let jwks = json!({
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "kid": TEST_KID,
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": n,
+                    "e": e
+                }
+            ]
+        });
+
+        let mut http = StaticOidcHttpClient::new();
+        http.insert(DISCOVERY_URL, discovery.to_string());
+        http.insert(JWKS_URL, jwks.to_string());
+
+        (
+            http,
+            EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap(),
+        )
+    }
+
+    fn issue_token(encoding_key: &EncodingKey, claims: TestClaims) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(TEST_KID.to_owned());
+
+        encode(&header, &claims, encoding_key).unwrap()
+    }
+
+    fn valid_claims() -> TestClaims {
+        TestClaims {
+            iss: ISSUER.to_owned(),
+            aud: AUDIENCE.to_owned(),
+            sub: "repo:owner/repo:ref:refs/heads/main".to_owned(),
+            exp: 4_102_444_800,
+            nbf: 1_700_000_000,
+            iat: 1_700_000_000,
+            r#ref: "refs/heads/main".to_owned(),
+            repository: "owner/repo".to_owned(),
+            project_slug: "example_repo".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_accepts_valid_token() {
+        let (http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
+        let token = issue_token(&encoding_key, valid_claims());
+
+        let principal = authorizer.authorize_bearer(Some(&token)).await.unwrap();
+
+        assert_eq!(principal.subject, "repo:owner/repo:ref:refs/heads/main");
+        assert_eq!(principal.provider.as_deref(), Some("github"));
+        assert_eq!(principal.ref_name.as_deref(), Some("refs/heads/main"));
+        assert_eq!(
+            principal.project.as_ref().map(|project| project.as_str()),
+            Some("example_repo")
+        );
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_rejects_wrong_audience() {
+        let (http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
+
+        let mut claims = valid_claims();
+        claims.aud = "https://wrong.example.com".to_owned();
+
+        let token = issue_token(&encoding_key, claims);
+        let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
+
+        assert_eq!(error, AuthError::InvalidToken);
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_rejects_subject_that_does_not_match_bound_subject() {
+        let (http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
+
+        let mut claims = valid_claims();
+        claims.sub = "repo:someone-else/repo:ref:refs/heads/main".to_owned();
+
+        let token = issue_token(&encoding_key, claims);
+        let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
+
+        assert_eq!(error, AuthError::InvalidToken);
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_rejects_claim_that_does_not_match_bound_claims() {
+        let (http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
+
+        let mut claims = valid_claims();
+        claims.repository = "owner/other-repo".to_owned();
+
+        let token = issue_token(&encoding_key, claims);
+        let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
+
+        assert_eq!(error, AuthError::InvalidToken);
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_rejects_malformed_token_before_fetch() {
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(StaticOidcHttpClient::new()));
+        let error = authorizer
+            .authorize_bearer(Some("not-a-real-token"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, AuthError::InvalidToken);
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_returns_unavailable_when_discovery_fetch_fails() {
+        let (_http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(StaticOidcHttpClient::new()));
+
+        let token = issue_token(&encoding_key, valid_claims());
+        let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
+
+        match error {
+            AuthError::Unavailable(message) => {
+                assert!(message.contains(DISCOVERY_URL));
+            }
+            other => panic!("expected AuthError::Unavailable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_returns_missing_token_when_no_bearer_is_provided() {
+        let (http, _encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
+
+        let error = authorizer.authorize_bearer(None).await.unwrap_err();
+
+        assert_eq!(error, AuthError::MissingToken);
+    }
+}
