@@ -102,6 +102,7 @@
         pkgs.sqlx-cli
         pkgs.pkg-config
         pkgs.sqlite
+        pkgs.rust-analyzer # lsp for agents
       ]
       ++ config.cache-db.devShellPackages
       ++ lib.optionals pkgs.stdenv.isDarwin [
