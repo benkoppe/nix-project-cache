@@ -46,12 +46,14 @@ tempfile = "3"
 tracing = "0.1"
 anyhow = "1"
 thiserror = "2"
+jsonwebtoken = "10"
 uuid = { version = "1", features = ["serde", "v7"] }
 base64 = "0.22"
 hex = "0.4"
 bytes = "1.11"
 zstd = "0.13"
 regex = "1.12"
+wildmatch = "2"
 clap = { version = "4.6", features = ["derive", "env"] }
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 time = { version = "0.3", features = [

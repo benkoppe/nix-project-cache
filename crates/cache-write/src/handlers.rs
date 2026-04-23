@@ -28,7 +28,7 @@ pub async fn begin_build(
     headers: HeaderMap,
     Json(request): Json<BeginBuildRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -47,7 +47,7 @@ pub async fn register_paths(
     headers: HeaderMap,
     Json(mut request): Json<RegisterPathsRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -67,7 +67,7 @@ pub async fn upload_object(
     State(state): State<WriteAppState>,
     request: Request,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, request.headers()) {
+    if let Err(error) = authorize(&*state.authorizer, request.headers()).await {
         return error.into_response();
     }
 
@@ -104,7 +104,7 @@ pub async fn finalize_build(
     State(state): State<WriteAppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -126,7 +126,7 @@ pub async fn list_pins(
     headers: HeaderMap,
     Query(query): Query<PinQuery>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -164,7 +164,7 @@ pub async fn create_pin(
     headers: HeaderMap,
     Json(request): Json<CreatePinRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -202,7 +202,7 @@ pub async fn delete_pin(
     headers: HeaderMap,
     Query(query): Query<PinQuery>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -226,7 +226,7 @@ pub async fn run_gc(
     headers: HeaderMap,
     Json(request): Json<RunGcRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -240,7 +240,7 @@ pub async fn run_gc(
 }
 
 pub async fn list_projects(State(state): State<WriteAppState>, headers: HeaderMap) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -272,7 +272,7 @@ pub async fn upsert_project(
     headers: HeaderMap,
     Json(request): Json<UpsertProjectRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers) {
+    if let Err(error) = authorize(&*state.authorizer, &headers).await {
         return error.into_response();
     }
 
@@ -308,16 +308,18 @@ impl IntoResponse for AuthorizeError {
     }
 }
 
-fn authorize(authorizer: &dyn Authorizer, headers: &HeaderMap) -> Result<(), AuthorizeError> {
+async fn authorize(authorizer: &dyn Authorizer, headers: &HeaderMap) -> Result<(), AuthorizeError> {
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim);
 
-    match authorizer.authorize_bearer(bearer) {
+    match authorizer.authorize_bearer(bearer).await {
         Ok(_) => Ok(()),
-        Err(AuthError::Disabled) => Err(AuthorizeError::ServiceUnavailable),
+        Err(AuthError::Disabled) | Err(AuthError::Unavailable(_)) => {
+            Err(AuthorizeError::ServiceUnavailable)
+        }
         Err(AuthError::MissingToken) | Err(AuthError::InvalidToken) => {
             Err(AuthorizeError::Unauthorized)
         }

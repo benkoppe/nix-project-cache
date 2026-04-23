@@ -17,6 +17,7 @@ pub struct AppConfig {
     pub local_object_root: PathBuf,
     pub signing_keys: Vec<NamedSigningKey>,
     pub write_token: Option<String>,
+    pub oidc_config_path: Option<PathBuf>,
     pub writable_local_backend: Option<LocalBackendName>,
 }
 
@@ -50,6 +51,7 @@ impl AppConfig {
         };
 
         let write_token = env::var("CACHE_WRITE_TOKEN").ok();
+        let oidc_config_path = env::var("CACHE_OIDC_CONFIG").ok().map(PathBuf::from);
 
         let writable_local_backend = match env::var("CACHE_WRITABLE_LOCAL_BACKEND") {
             Ok(value) if value.trim().is_empty() => None,
@@ -68,6 +70,7 @@ impl AppConfig {
             local_object_root,
             signing_keys,
             write_token,
+            oidc_config_path,
             writable_local_backend,
         })
     }
