@@ -84,12 +84,13 @@ mod tests {
     use uuid::Uuid;
 
     use cache_db::SqliteDatabase;
+    use cache_test_utils::{EXAMPLE_PROJECT_NAME, example_project};
 
     use super::*;
 
     #[tokio::test]
     async fn static_upstream_selector_returns_configured_project_upstreams() {
-        let project = ProjectSlug::parse("example_repo").unwrap();
+        let project = example_project();
         let upstream = UpstreamCache::new(
             Uuid::now_v7(),
             "cache.nixos.org",
@@ -122,7 +123,7 @@ mod tests {
             10,
         );
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, EXAMPLE_PROJECT_NAME, true)
             .await
             .unwrap();
         db.insert_upstream_cache(&upstream, true).await.unwrap();

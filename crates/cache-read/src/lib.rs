@@ -29,16 +29,21 @@ mod tests {
     use cache_store::blob::BlobMetadata;
     use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
-    use cache_test_utils::{example_project, hello_path, sample_upstream, test_signing_keys};
+    use cache_test_utils::{
+        EXAMPLE_PROJECT_SLUG, SamplePath, example_project, hello_path, sample_upstream,
+        test_signing_keys,
+    };
 
     use crate::{
         InMemoryNarInfoResolver, ReadAppState, ReadService, StaticUpstreamSelector, read_router,
     };
 
     fn sample_local_object_store() -> InMemoryLocalObjectStore {
+        let path = hello_path();
+
         let mut store = InMemoryLocalObjectStore::new();
         store.insert(
-            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
+            path.url(),
             BlobMetadata::new("application/octet-stream", Some(9), None, None),
             Bytes::from_static(b"local-nar"),
         );
@@ -99,6 +104,35 @@ mod tests {
         ReadAppState::new(Arc::new(read_service), 30)
     }
 
+    fn project_cache_info_path() -> String {
+        format!("/p/{EXAMPLE_PROJECT_SLUG}/nix-cache-info")
+    }
+
+    fn aggregate_narinfo_path(path: SamplePath) -> String {
+        format!("/{}.narinfo", path.hash().as_str())
+    }
+
+    fn project_narinfo_path(path: SamplePath) -> String {
+        format!("/p/{EXAMPLE_PROJECT_SLUG}/{}.narinfo", path.hash().as_str())
+    }
+
+    fn object_path(path: SamplePath) -> String {
+        format!("/{}", path.url())
+    }
+
+    fn invalid_project_narinfo_path(path: SamplePath) -> String {
+        format!("/p/INVALID!/{hash}.narinfo", hash = path.hash().as_str())
+    }
+
+    fn assert_contains_rendered_narinfo(body: &str, path: SamplePath) {
+        for line in path.narinfo_text(&[]).lines() {
+            assert!(
+                body.contains(line),
+                "missing narinfo line {line:?} in body {body:?}"
+            );
+        }
+    }
+
     async fn request(app: axum::Router, method: Method, uri: &str) -> axum::response::Response {
         app.oneshot(
             Request::builder()
@@ -157,22 +191,15 @@ mod tests {
 
     #[tokio::test]
     async fn project_nix_cache_info_returns_expected_text() {
-        let response = get(
-            read_router(sample_state()),
-            "/p/example_repo/nix-cache-info",
-        )
-        .await;
+        let response = get(read_router(sample_state()), &project_cache_info_path()).await;
 
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn aggregate_narinfo_route_returns_rendered_signed_narinfo() {
-        let response = get(
-            read_router(sample_state()),
-            "/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
-        )
-        .await;
+        let path = hello_path();
+        let response = get(read_router(sample_state()), &aggregate_narinfo_path(path)).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -186,17 +213,7 @@ mod tests {
         );
 
         let body = body_to_string(response).await;
-        assert!(
-            body.contains("StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1\n")
-        );
-        assert!(
-            body.contains(
-                "URL: nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst\n"
-            )
-        );
-        assert!(
-            body.contains("NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz\n")
-        );
+        assert_contains_rendered_narinfo(&body, path);
         assert!(body.contains("\nSig: cache.example.com-1:"));
     }
 
@@ -204,7 +221,7 @@ mod tests {
     async fn project_narinfo_route_returns_rendered_signed_narinfo() {
         let response = get(
             read_router(sample_state()),
-            "/p/example_repo/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
+            &project_narinfo_path(hello_path()),
         )
         .await;
 
@@ -222,11 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_nar_route_returns_blob_bytes() {
-        let response = get(
-            read_router(sample_state()),
-            "/nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-        )
-        .await;
+        let response = get(read_router(sample_state()), &object_path(hello_path())).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -246,18 +259,17 @@ mod tests {
 
     #[tokio::test]
     async fn upstream_narinfo_fallback_returns_rendered_signed_narinfo() {
+        let path = hello_path();
         let response = get(
             read_router(upstream_fallback_state()),
-            "/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
+            &aggregate_narinfo_path(path),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = body_to_string(response).await;
-        assert!(
-            body.contains("StorePath: /nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1\n")
-        );
+        assert_contains_rendered_narinfo(&body, path);
         assert!(body.contains("Sig: cache.nixos.org-1:upstreamsig\n"));
         assert!(body.contains("Sig: cache.example.com-1:"));
     }
@@ -266,7 +278,7 @@ mod tests {
     async fn upstream_nar_blob_fallback_returns_bytes() {
         let response = get(
             read_router(upstream_fallback_state()),
-            "/nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
+            &object_path(hello_path()),
         )
         .await;
 
@@ -299,7 +311,7 @@ mod tests {
     async fn invalid_project_slug_returns_not_found() {
         let response = get(
             read_router(sample_state()),
-            "/p/INVALID!/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
+            &invalid_project_narinfo_path(hello_path()),
         )
         .await;
 
@@ -310,7 +322,7 @@ mod tests {
     async fn head_narinfo_is_supported() {
         let response = head(
             read_router(sample_state()),
-            "/26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
+            &aggregate_narinfo_path(hello_path()),
         )
         .await;
 

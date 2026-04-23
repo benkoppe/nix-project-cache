@@ -81,17 +81,13 @@ impl GcService {
 mod tests {
     use std::sync::Arc;
 
-    use tempfile::tempdir;
-
-    use cache_core::narinfo::NarInfo;
-    use cache_core::nix::{NixHash, StorePathHash};
-    use cache_core::project::ProjectSlug;
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::SqliteDatabase;
     use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::local::{
         FilesystemLocalObjectBackend, LocalObjectBackend, LocalObjectBackendRegistry,
     };
+    use cache_test_utils::{TestDatabase, filesystem_backends_in, hello_path};
 
     use super::*;
 
@@ -100,23 +96,12 @@ mod tests {
         LocalObjectBackendRegistry,
         tempfile::TempDir,
     ) {
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("cache.db");
-        let objects_root = temp_dir.path().join("objects");
+        let fixture = TestDatabase::new().await.unwrap();
+        fixture.insert_example_project().await.unwrap();
 
-        let db = SqliteDatabase::open(&db_path).await.unwrap();
-        let project = ProjectSlug::parse("example_repo").unwrap();
-        db.insert_project(&project, "Example Repo", true)
-            .await
-            .unwrap();
+        let backends = filesystem_backends_in(&fixture.temp_dir);
 
-        let mut backends = LocalObjectBackendRegistry::new();
-        backends.register(
-            LocalBackendName::fs(),
-            Arc::new(FilesystemLocalObjectBackend::new(&objects_root)),
-        );
-
-        (db, backends, temp_dir)
+        (fixture.db, backends, fixture.temp_dir)
     }
 
     #[tokio::test]
@@ -221,38 +206,24 @@ mod tests {
         let (db, backends, _tmp) = setup().await;
         let backend = backends.require(&LocalBackendName::fs()).unwrap();
 
-        let store_path = "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1";
-        let store_path_hash = StorePathHash::parse_from_store_path(store_path).unwrap();
-        let object_path = "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst";
-
-        let narinfo = NarInfo {
-            store_path: store_path.to_owned(),
-            url: object_path.to_owned(),
-            compression: "zstd".to_owned(),
-            nar_hash: NixHash::Raw(
-                "sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned(),
-            ),
-            nar_size: 4,
-            references: vec![],
-            deriver: None,
-            signatures: vec![],
-            ca: None,
-        };
+        let path = hello_path();
+        let hash = path.hash();
+        let narinfo = path.narinfo();
 
         db.upsert_path_info(&narinfo).await.unwrap();
         backend
-            .put_bytes(object_path, BlobBytes::from_static(b"live"))
+            .put_bytes(path.url(), BlobBytes::from_static(b"live"))
             .await
             .unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
-        db.upsert_local_object(object_path, &metadata, &LocalBackendName::fs(), object_path)
+        db.upsert_local_object(path.url(), &metadata, &LocalBackendName::fs(), path.url())
             .await
             .unwrap();
-        db.link_path_object(&store_path_hash, object_path, PathObjectKind::Nar)
+        db.link_path_object(&hash, path.url(), PathObjectKind::Nar)
             .await
             .unwrap();
-        db.upsert_pin("myapp", None, &store_path_hash, store_path)
+        db.upsert_pin("myapp", None, &hash, &narinfo.store_path)
             .await
             .unwrap();
 
@@ -260,6 +231,6 @@ mod tests {
         let result = gc.run_local_gc(false).await.unwrap();
 
         assert_eq!(result.deleted_count, 0);
-        assert!(db.get_local_object(object_path).await.unwrap().is_some());
+        assert!(db.get_local_object(path.url()).await.unwrap().is_some());
     }
 }

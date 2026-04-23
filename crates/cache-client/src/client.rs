@@ -286,7 +286,9 @@ mod tests {
         RegisterPathsResponse, RunGcRequest, RunGcResponse, UpsertProjectRequest,
     };
     use cache_core::project::ProjectSlug;
-    use cache_test_utils::{TestServer, duplex_reader, hello_path};
+    use cache_test_utils::{
+        EXAMPLE_PROJECT_NAME, EXAMPLE_PROJECT_SLUG, TestServer, duplex_reader, hello_path,
+    };
 
     use super::*;
 
@@ -303,6 +305,10 @@ mod tests {
         project: Option<String>,
     }
 
+    const BUILD_ID: &str = "build-123";
+    const RELEASE_PIN_NAME: &str = "release";
+    const RELEASE_STORE_PATH: &str = "/nix/store/example-release";
+
     async fn begin_build_handler(
         State(state): State<TestState>,
         headers: HeaderMap,
@@ -316,7 +322,7 @@ mod tests {
                 .to_owned(),
         );
 
-        assert_eq!(request.project, "example_repo");
+        assert_eq!(request.project, EXAMPLE_PROJECT_SLUG);
         assert_eq!(request.ref_name, "main");
         assert_eq!(request.revision.as_deref(), Some("deadbeef"));
 
@@ -333,7 +339,7 @@ mod tests {
     ) -> (StatusCode, Json<RegisterPathsResponse>) {
         let path = hello_path();
 
-        assert_eq!(request.build_id, "build-123");
+        assert_eq!(request.build_id, BUILD_ID);
         assert_eq!(request.paths.len(), 1);
         assert_eq!(request.paths[0].store_path, path.store_path());
         assert_eq!(request.paths[0].url, path.url());
@@ -342,7 +348,7 @@ mod tests {
             StatusCode::OK,
             Json(RegisterPathsResponse {
                 required_uploads: vec![cache_api::RequiredUpload {
-                    store_path_hash: "26xbg1ndr7hbcncrlf9nhx5is2b25d13".to_owned(),
+                    store_path_hash: path.hash().as_str().to_owned(),
                     object_path: path.url().to_owned(),
                     storage_backend: "fs".to_owned(),
                     storage_key: path.url().to_owned(),
@@ -392,9 +398,9 @@ mod tests {
         (
             StatusCode::OK,
             Json(vec![PinInfo {
-                name: "release".to_owned(),
+                name: RELEASE_PIN_NAME.to_owned(),
                 project: query.project,
-                store_path: "/nix/store/example-release".to_owned(),
+                store_path: RELEASE_STORE_PATH.to_owned(),
                 created_at: "2026-04-20T00:00:00Z".to_owned(),
                 updated_at: "2026-04-20T00:00:00Z".to_owned(),
             }]),
@@ -405,9 +411,9 @@ mod tests {
         Path(name): Path<String>,
         Json(request): Json<CreatePinRequest>,
     ) -> StatusCode {
-        assert_eq!(name, "release");
-        assert_eq!(request.project.as_deref(), Some("example_repo"));
-        assert_eq!(request.store_path, "/nix/store/example-release");
+        assert_eq!(name, RELEASE_PIN_NAME);
+        assert_eq!(request.project.as_deref(), Some(EXAMPLE_PROJECT_SLUG));
+        assert_eq!(request.store_path, RELEASE_STORE_PATH);
         StatusCode::NO_CONTENT
     }
 
@@ -416,7 +422,7 @@ mod tests {
         Path(name): Path<String>,
         Query(query): Query<PinQuery>,
     ) -> StatusCode {
-        assert_eq!(name, "release");
+        assert_eq!(name, RELEASE_PIN_NAME);
         state.pin_queries.lock().unwrap().push(query.project);
 
         StatusCode::NO_CONTENT
@@ -426,8 +432,8 @@ mod tests {
         (
             StatusCode::OK,
             Json(vec![ProjectInfo {
-                slug: "example_repo".to_owned(),
-                display_name: "Example Repo".to_owned(),
+                slug: EXAMPLE_PROJECT_SLUG.to_owned(),
+                display_name: EXAMPLE_PROJECT_NAME.to_owned(),
                 public: true,
                 created_at: "2026-04-20T00:00:00Z".to_owned(),
             }]),
@@ -435,8 +441,8 @@ mod tests {
     }
 
     async fn upsert_project_handler(Json(request): Json<UpsertProjectRequest>) -> StatusCode {
-        assert_eq!(request.slug, "example_repo");
-        assert_eq!(request.display_name, "Example Repo");
+        assert_eq!(request.slug, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(request.display_name, EXAMPLE_PROJECT_NAME);
         assert!(request.public);
         StatusCode::NO_CONTENT
     }
@@ -467,14 +473,14 @@ mod tests {
 
         let response = client
             .begin_build(BeginBuildRequest {
-                project: "example_repo".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
                 ref_name: "main".to_owned(),
                 revision: Some("deadbeef".to_owned()),
             })
             .await
             .unwrap();
 
-        assert_eq!(response.build_id, "build-123");
+        assert_eq!(response.build_id, BUILD_ID);
         assert_eq!(
             state.auth_headers.lock().unwrap().as_slice(),
             &["Bearer secret-token".to_owned()]
@@ -499,14 +505,14 @@ mod tests {
         let hash = path.hash();
 
         let register = client
-            .register_paths("build-123", vec![path.narinfo()])
+            .register_paths(BUILD_ID, vec![path.narinfo()])
             .await
             .unwrap();
         assert_eq!(register.required_uploads.len(), 1);
 
         client
             .upload_object_reader(
-                "build-123",
+                BUILD_ID,
                 &hash,
                 path.url(),
                 duplex_reader(b"hello streamed world"),
@@ -514,13 +520,13 @@ mod tests {
             .await
             .unwrap();
 
-        client.finalize_build("build-123").await.unwrap();
+        client.finalize_build(BUILD_ID).await.unwrap();
 
         assert_eq!(
             state.uploaded_paths.lock().unwrap().as_slice(),
             &[(
-                "build-123".to_owned(),
-                "26xbg1ndr7hbcncrlf9nhx5is2b25d13".to_owned(),
+                BUILD_ID.to_owned(),
+                hash.as_str().to_owned(),
                 path.url().to_owned(),
             )]
         );
@@ -548,21 +554,26 @@ mod tests {
 
         let pins = client.list_pins(Some(&project)).await.unwrap();
         assert_eq!(pins.len(), 1);
-        assert_eq!(pins[0].name, "release");
+        assert_eq!(pins[0].name, RELEASE_PIN_NAME);
 
         client
-            .create_pin("release", Some(&project), "/nix/store/example-release")
+            .create_pin(RELEASE_PIN_NAME, Some(&project), RELEASE_STORE_PATH)
             .await
             .unwrap();
 
-        assert!(client.delete_pin("release", Some(&project)).await.unwrap());
+        assert!(
+            client
+                .delete_pin(RELEASE_PIN_NAME, Some(&project))
+                .await
+                .unwrap()
+        );
 
         let projects = client.list_projects().await.unwrap();
         assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].slug, "example_repo");
+        assert_eq!(projects[0].slug, EXAMPLE_PROJECT_SLUG);
 
         client
-            .upsert_project(&project, "Example Repo", true)
+            .upsert_project(&project, EXAMPLE_PROJECT_NAME, true)
             .await
             .unwrap();
 
@@ -573,8 +584,8 @@ mod tests {
         assert_eq!(
             state.pin_queries.lock().unwrap().as_slice(),
             &[
-                Some("example_repo".to_owned()),
-                Some("example_repo".to_owned())
+                Some(EXAMPLE_PROJECT_SLUG.to_owned()),
+                Some(EXAMPLE_PROJECT_SLUG.to_owned())
             ]
         );
     }
@@ -593,10 +604,10 @@ mod tests {
 
         let server = TestServer::spawn(app).await.unwrap();
         let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
-        let project = ProjectSlug::parse("example_repo").unwrap();
+        let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
 
         let error = client
-            .upsert_project(&project, "Example Repo", true)
+            .upsert_project(&project, EXAMPLE_PROJECT_NAME, true)
             .await
             .unwrap_err();
 
@@ -626,7 +637,7 @@ mod tests {
 
         client
             .upload_object_bytes(
-                "build-123",
+                BUILD_ID,
                 &hash,
                 path.url(),
                 bytes::Bytes::from_static(b"small"),
