@@ -348,7 +348,7 @@ mod tests {
             StatusCode::OK,
             Json(RegisterPathsResponse {
                 required_uploads: vec![cache_api::RequiredUpload {
-                    store_path_hash: path.hash().as_str().to_owned(),
+                    store_path_hash: path.hash_str(),
                     object_path: path.url().to_owned(),
                     storage_backend: "fs".to_owned(),
                     storage_key: path.url().to_owned(),

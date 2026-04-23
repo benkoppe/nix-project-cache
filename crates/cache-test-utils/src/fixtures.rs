@@ -30,6 +30,10 @@ impl SamplePath {
         StorePathHash::parse_from_store_path(self.store_path).unwrap()
     }
 
+    pub fn hash_str(self) -> String {
+        self.hash().as_str().to_owned()
+    }
+
     pub fn narinfo(self) -> NarInfo {
         NarInfo {
             store_path: self.store_path.to_owned(),
