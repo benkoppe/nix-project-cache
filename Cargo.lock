@@ -263,14 +263,13 @@ dependencies = [
  "cache-ingest",
  "cache-read",
  "cache-store",
+ "cache-test-utils",
  "cache-write",
  "reqwest",
- "serde_json",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -288,6 +287,7 @@ dependencies = [
  "bytes",
  "cache-api",
  "cache-core",
+ "cache-test-utils",
  "reqwest",
  "serde",
  "serde_json",
@@ -337,6 +337,7 @@ dependencies = [
  "cache-db",
  "cache-read",
  "cache-store",
+ "cache-test-utils",
  "tempfile",
  "tokio",
  "tracing",
@@ -373,6 +374,7 @@ dependencies = [
  "cache-core",
  "cache-db",
  "cache-store",
+ "cache-test-utils",
  "http-body-util",
  "tempfile",
  "tokio",
@@ -399,6 +401,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache-test-utils"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cache-api",
+ "cache-core",
+ "cache-db",
+ "cache-store",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "cache-write"
 version = "0.0.1"
 dependencies = [
@@ -410,6 +427,7 @@ dependencies = [
  "cache-db",
  "cache-ingest",
  "cache-store",
+ "cache-test-utils",
  "futures-util",
  "http-body-util",
  "serde",

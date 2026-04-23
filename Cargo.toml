@@ -11,6 +11,7 @@ members = [
   "crates/cache-push",
   "crates/cache-read",
   "crates/cache-store",
+  "crates/cache-test-utils",
   "crates/cache-write",
 ]
 package.version = "0.0.1"

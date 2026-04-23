@@ -280,14 +280,13 @@ mod tests {
     use axum::routing::{delete, get, post, put};
     use serde::Deserialize;
     use serde_json::json;
-    use tokio::io::AsyncWriteExt as _;
 
     use cache_api::{
-        BeginBuildRequest, BeginBuildResponse, PinInfo, ProjectInfo, RunGcRequest, RunGcResponse,
+        BeginBuildRequest, BeginBuildResponse, CreatePinRequest, PinInfo, ProjectInfo,
+        RegisterPathsResponse, RunGcRequest, RunGcResponse, UpsertProjectRequest,
     };
-    use cache_core::narinfo::NarInfo;
-    use cache_core::nix::{NixHash, StorePathHash};
     use cache_core::project::ProjectSlug;
+    use cache_test_utils::{TestServer, duplex_reader, hello_path};
 
     use super::*;
 
@@ -332,17 +331,21 @@ mod tests {
     async fn register_paths_handler(
         Json(request): Json<cache_api::RegisterPathsRequest>,
     ) -> (StatusCode, Json<RegisterPathsResponse>) {
+        let path = hello_path();
+
         assert_eq!(request.build_id, "build-123");
         assert_eq!(request.paths.len(), 1);
+        assert_eq!(request.paths[0].store_path, path.store_path());
+        assert_eq!(request.paths[0].url, path.url());
 
         (
             StatusCode::OK,
             Json(RegisterPathsResponse {
                 required_uploads: vec![cache_api::RequiredUpload {
                     store_path_hash: "26xbg1ndr7hbcncrlf9nhx5is2b25d13".to_owned(),
-                    object_path: "nar/example.nar.zst".to_owned(),
+                    object_path: path.url().to_owned(),
                     storage_backend: "fs".to_owned(),
-                    storage_key: "nar/example.nar.zst".to_owned(),
+                    storage_key: path.url().to_owned(),
                     content_type: "application/octet-stream".to_owned(),
                 }],
             }),
@@ -452,43 +455,6 @@ mod tests {
         )
     }
 
-    async fn spawn_server(router: Router) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        (format!("http://{address}"), handle)
-    }
-
-    fn sample_narinfo() -> NarInfo {
-        NarInfo {
-            store_path: "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1".to_owned(),
-            url: "nar/example.nar.zst".to_owned(),
-            compression: "zstd".to_owned(),
-            nar_hash: NixHash::Raw(
-                "sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned(),
-            ),
-            nar_size: 123,
-            references: vec![],
-            deriver: None,
-            signatures: vec![],
-            ca: None,
-        }
-    }
-
-    fn streaming_reader(bytes: &'static [u8]) -> tokio::io::DuplexStream {
-        let (mut writer, reader) = tokio::io::duplex(bytes.len().max(1));
-
-        tokio::spawn(async move {
-            writer.write_all(bytes).await.unwrap();
-            writer.shutdown().await.unwrap();
-        });
-
-        reader
-    }
-
     #[tokio::test]
     async fn begin_build_sends_auth_and_parses_response() {
         let state = TestState::default();
@@ -496,8 +462,8 @@ mod tests {
             .route("/api/builds", post(begin_build_handler))
             .with_state(state.clone());
 
-        let (base_url, handle) = spawn_server(app).await;
-        let client = CacheClient::new(&base_url, "secret-token").unwrap();
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
 
         let response = client
             .begin_build(BeginBuildRequest {
@@ -513,8 +479,6 @@ mod tests {
             state.auth_headers.lock().unwrap().as_slice(),
             &["Bearer secret-token".to_owned()]
         );
-
-        handle.abort();
     }
 
     #[tokio::test]
@@ -529,12 +493,13 @@ mod tests {
             .route("/api/builds/{build_id}/finalize", post(finalize_handler))
             .with_state(state.clone());
 
-        let (base_url, handle) = spawn_server(app).await;
-        let client = CacheClient::new(&base_url, "secret-token").unwrap();
-        let hash = StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13").unwrap();
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let path = hello_path();
+        let hash = path.hash();
 
         let register = client
-            .register_paths("build-123", vec![sample_narinfo()])
+            .register_paths("build-123", vec![path.narinfo()])
             .await
             .unwrap();
         assert_eq!(register.required_uploads.len(), 1);
@@ -543,8 +508,8 @@ mod tests {
             .upload_object_reader(
                 "build-123",
                 &hash,
-                "nar/example.nar.zst",
-                streaming_reader(b"hello streamed world"),
+                path.url(),
+                duplex_reader(b"hello streamed world"),
             )
             .await
             .unwrap();
@@ -556,15 +521,13 @@ mod tests {
             &[(
                 "build-123".to_owned(),
                 "26xbg1ndr7hbcncrlf9nhx5is2b25d13".to_owned(),
-                "nar/example.nar.zst".to_owned(),
+                path.url().to_owned(),
             )]
         );
         assert_eq!(
             state.uploaded_bodies.lock().unwrap().as_slice(),
             &[b"hello streamed world".to_vec()]
         );
-
-        handle.abort();
     }
 
     #[tokio::test]
@@ -579,8 +542,8 @@ mod tests {
             .route("/api/gc", post(run_gc_handler))
             .with_state(state.clone());
 
-        let (base_url, handle) = spawn_server(app).await;
-        let client = CacheClient::new(&base_url, "secret-token").unwrap();
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
         let pins = client.list_pins(Some(&project)).await.unwrap();
@@ -614,8 +577,6 @@ mod tests {
                 Some("example_repo".to_owned())
             ]
         );
-
-        handle.abort();
     }
 
     #[tokio::test]
@@ -630,8 +591,8 @@ mod tests {
             }),
         );
 
-        let (base_url, handle) = spawn_server(app).await;
-        let client = CacheClient::new(&base_url, "secret-token").unwrap();
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
         let error = client
@@ -646,8 +607,6 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-
-        handle.abort();
     }
 
     #[tokio::test]
@@ -660,15 +619,16 @@ mod tests {
             )
             .with_state(state.clone());
 
-        let (base_url, handle) = spawn_server(app).await;
-        let client = CacheClient::new(&base_url, "secret-token").unwrap();
-        let hash = StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13").unwrap();
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let path = hello_path();
+        let hash = path.hash();
 
         client
             .upload_object_bytes(
                 "build-123",
                 &hash,
-                "nar/example.nar.zst",
+                path.url(),
                 bytes::Bytes::from_static(b"small"),
             )
             .await
@@ -678,7 +638,5 @@ mod tests {
             state.uploaded_bodies.lock().unwrap().as_slice(),
             &[b"small".to_vec()]
         );
-
-        handle.abort();
     }
 }

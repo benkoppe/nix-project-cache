@@ -18,11 +18,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+cache-test-utils = { path = "../cache-test-utils" }
 cache-api = { path = "../cache-api" }
 cache-client = { path = "../cache-client" }
 bytes.workspace = true
 reqwest.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["net"] }
-uuid.workspace = true

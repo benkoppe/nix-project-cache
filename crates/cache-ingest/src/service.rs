@@ -269,85 +269,40 @@ mod tests {
     use std::sync::Arc;
 
     use tempfile::TempDir;
-    use tokio::io::AsyncWriteExt as _;
     use uuid::Uuid;
 
-    use cache_api::{BeginBuildRequest, NarInfoPayload, RegisterPathsRequest};
-    use cache_core::nix::{NixHash, StorePathHash};
-    use cache_core::project::ProjectSlug;
+    use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_read::DbBackedLocalObjectStore;
     use cache_store::blob::{BlobBytes, BlobMetadata};
-    use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
-    use cache_store::upstream::{InMemoryUpstreamCacheClient, UpstreamCache};
+    use cache_store::upstream::InMemoryUpstreamCacheClient;
+    use cache_test_utils::{
+        EXAMPLE_PROJECT_SLUG, TestDatabase, duplex_reader, example_project, filesystem_backends_in,
+        hello_path, sample_upstream,
+    };
 
     use super::*;
-
-    fn sample_payload() -> NarInfoPayload {
-        NarInfoPayload {
-            store_path: "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1".to_owned(),
-            url: "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst".to_owned(),
-            compression: "zstd".to_owned(),
-            nar_hash: NixHash::Raw(
-                "sha256-n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=".to_owned(),
-            )
-            .render_text(),
-            nar_size: 226560,
-            references: vec![],
-            deriver: None,
-            signatures: vec![],
-            ca: None,
-        }
-    }
-
-    fn sample_hash() -> StorePathHash {
-        StorePathHash::parse_from_store_path(
-            "/nix/store/26xbg1ndr7hbcncrlf9nhx5is2b25d13-hello-2.12.1",
-        )
-        .unwrap()
-    }
-
-    fn stream_reader(bytes: &'static [u8]) -> LocalUploadReader {
-        let (mut writer, reader) = tokio::io::duplex(bytes.len().max(1));
-
-        tokio::spawn(async move {
-            writer.write_all(bytes).await.unwrap();
-            writer.shutdown().await.unwrap();
-        });
-
-        Box::pin(reader)
-    }
 
     async fn build_service(
         upstream_client: InMemoryUpstreamCacheClient,
         writable_local_backend: Option<LocalBackendName>,
     ) -> (IngestService, SqliteDatabase, TempDir) {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("cache.db");
-        let objects_root = temp_dir.path().join("objects");
+        let fixture = TestDatabase::new().await.unwrap();
+        fixture.insert_example_project().await.unwrap();
 
-        let db = SqliteDatabase::open(&db_path).await.unwrap();
-        let project = ProjectSlug::parse("example_repo").unwrap();
-        db.insert_project(&project, "Example Repo", true)
-            .await
-            .unwrap();
-
-        let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(&objects_root));
-        let mut backends = LocalObjectBackendRegistry::new();
-        backends.register(LocalBackendName::fs(), fs_backend);
-
-        let local_store = DbBackedLocalObjectStore::new(db.clone(), backends.clone());
+        let backends = filesystem_backends_in(&fixture.temp_dir);
+        let local_store = DbBackedLocalObjectStore::new(fixture.db.clone(), backends.clone());
 
         let service = IngestService::new(
-            db.clone(),
+            fixture.db.clone(),
             Arc::new(local_store),
             backends,
             writable_local_backend,
             Arc::new(upstream_client),
         );
 
-        (service, db, temp_dir)
+        (service, fixture.db, fixture.temp_dir)
     }
 
     #[tokio::test]
@@ -357,12 +312,14 @@ mod tests {
             Some(LocalBackendName::fs()),
         )
         .await;
-        let payload = sample_payload();
-        let hash = sample_hash();
+
+        let path = hello_path();
+        let payload = path.payload();
+        let hash = path.hash();
 
         let begin = service
             .begin_build(BeginBuildRequest {
-                project: "example_repo".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
                 ref_name: "main".to_owned(),
                 revision: Some("deadbeef".to_owned()),
             })
@@ -384,7 +341,7 @@ mod tests {
         assert_eq!(register.required_uploads[0].object_path, payload.url);
 
         service
-            .upload_object(build_id, &hash, &payload.url, stream_reader(b"nar-bytes"))
+            .upload_object(build_id, &hash, &payload.url, duplex_reader(b"nar-bytes"))
             .await
             .unwrap();
 
@@ -412,7 +369,7 @@ mod tests {
             Some(LocalBackendName::fs()),
         )
         .await;
-        let payload = sample_payload();
+        let payload = hello_path().payload();
 
         let begin = service
             .begin_build(BeginBuildRequest {
@@ -447,16 +404,13 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_allows_upstream_backed_path_without_local_upload() {
-        let payload = sample_payload();
-        let hash = sample_hash();
+        let path = hello_path();
+        let payload = path.payload();
+        let hash = path.hash();
 
         let mut upstream_client = InMemoryUpstreamCacheClient::new();
-        let upstream = UpstreamCache::new(
-            Uuid::now_v7(),
-            "cache.nixos.org",
-            "https://cache.nixos.org",
-            10,
-        );
+        let upstream = sample_upstream("https://cache.nixos.org");
+
         upstream_client.insert_object(
             upstream.id,
             payload.url.clone(),
@@ -465,7 +419,7 @@ mod tests {
         );
 
         let (service, db, _tmp) = build_service(upstream_client, None).await;
-        let project = ProjectSlug::parse("example_repo").unwrap();
+        let project = example_project();
 
         db.insert_upstream_cache(&upstream, true).await.unwrap();
         db.link_project_upstream(&project, upstream.id)
@@ -513,7 +467,7 @@ mod tests {
 
         let begin = service
             .begin_build(BeginBuildRequest {
-                project: "example_repo".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
                 ref_name: "main".to_owned(),
                 revision: None,
             })
@@ -523,7 +477,7 @@ mod tests {
         let error = service
             .register_paths(RegisterPathsRequest {
                 build_id: begin.build_id,
-                paths: vec![sample_payload()],
+                paths: vec![hello_path().payload()],
             })
             .await
             .unwrap_err();
