@@ -79,8 +79,6 @@ impl GcService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::SqliteDatabase;
     use cache_store::blob::{BlobBytes, BlobMetadata};
