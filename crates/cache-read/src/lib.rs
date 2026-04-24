@@ -3,6 +3,7 @@ pub mod local_objects;
 pub mod resolver;
 pub mod router;
 pub mod service;
+pub mod signing_keys;
 pub mod state;
 pub mod upstreams;
 
@@ -10,6 +11,7 @@ pub use local_objects::{DbBackedLocalObjectStore, ViewLocalObjectStore};
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::read_router;
 pub use service::ReadService;
+pub use signing_keys::DbProjectSigningKeys;
 pub use state::ReadAppState;
 pub use upstreams::{DbUpstreamSelector, StaticUpstreamSelector, UpstreamSelector};
 
@@ -20,18 +22,17 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode, header};
     use bytes::Bytes;
+    use cache_test_utils::fixtures::test_signing_key;
     use http_body_util::BodyExt as _;
     use tower::util::ServiceExt as _;
 
     use cache_core::narinfo::NarInfoRenderer;
     use cache_core::nix::StoreDir;
-    use cache_core::signing::NarInfoSigner;
     use cache_store::blob::BlobMetadata;
     use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
         EXAMPLE_PROJECT_SLUG, SamplePath, example_project, hello_path, sample_upstream,
-        test_signing_keys,
     };
 
     use crate::{
@@ -65,7 +66,8 @@ mod tests {
             Arc::new(InMemoryUpstreamCacheClient::new()),
             Arc::new(StaticUpstreamSelector::new()),
             NarInfoRenderer::new(StoreDir::default()),
-            NarInfoSigner::new(StoreDir::default(), test_signing_keys()),
+            Some(test_signing_key()),
+            None,
         );
 
         ReadAppState::new(Arc::new(read_service), 30)
@@ -98,7 +100,8 @@ mod tests {
             Arc::new(upstream_client),
             Arc::new(upstream_selector),
             NarInfoRenderer::new(StoreDir::default()),
-            NarInfoSigner::new(StoreDir::default(), test_signing_keys()),
+            Some(test_signing_key()),
+            None,
         );
 
         ReadAppState::new(Arc::new(read_service), 30)

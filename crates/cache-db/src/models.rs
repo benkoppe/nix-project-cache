@@ -354,6 +354,53 @@ impl PinLookupRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProjectSigningKeyLookupRow {
+    pub id: String,
+    pub project_slug: String,
+    pub name: String,
+    pub public_key: String,
+    pub encrypted_private_key: String,
+    pub nonce: String,
+    pub created_at: String,
+    pub retired_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectSigningKeyRecord {
+    pub id: String,
+    pub project_slug: ProjectSlug,
+    pub name: String,
+    pub public_key: String,
+    pub encrypted_private_key: String,
+    pub nonce: String,
+    pub created_at: OffsetDateTime,
+    pub retired_at: Option<OffsetDateTime>,
+}
+
+impl ProjectSigningKeyLookupRow {
+    pub fn into_record(self) -> Result<ProjectSigningKeyRecord> {
+        Ok(ProjectSigningKeyRecord {
+            id: self.id,
+            project_slug: ProjectSlug::parse(&self.project_slug)
+                .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.project_slug))?,
+            name: self.name,
+            public_key: self.public_key,
+            encrypted_private_key: self.encrypted_private_key,
+            nonce: self.nonce,
+            created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
+                .context("parsing project signing key created_at")?,
+            retired_at: self
+                .retired_at
+                .map(|value| {
+                    OffsetDateTime::parse(&value, &Rfc3339)
+                        .context("parsing project signing key retired_at")
+                })
+                .transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ProjectRetentionPolicyLookupRow {
     pub project_slug: String,
     pub inherited_default: i64,

@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use anyhow::Result;
+
+use cache_core::view::CacheView;
+
 use crate::service::ReadService;
 
 #[derive(Clone)]
@@ -16,11 +20,19 @@ impl ReadAppState {
         }
     }
 
-    pub fn nix_cache_info_text(&self) -> String {
-        format!(
+    pub async fn nix_cache_info_text(&self, view: &CacheView) -> Result<String> {
+        let mut text = format!(
             "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
             self.read_service.store_dir(),
             self.priority
-        )
+        );
+
+        for public_key in self.read_service.public_key_texts_for_view(view).await? {
+            text.push_str("PublicKey: ");
+            text.push_str(&public_key);
+            text.push('\n');
+        }
+
+        Ok(text)
     }
 }

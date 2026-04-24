@@ -12,8 +12,9 @@ use cache_core::project::ProjectSlug;
 
 use crate::cli::{
     AddProjectOidcCommand, CreateProjectCommand, GetProjectRetentionCommand,
-    ListProjectOidcCommand, ProjectOidcCommand, ProjectRetentionCommand, ProjectsCommand,
-    RemoveProjectOidcCommand, ResetProjectRetentionCommand, RetentionProfile,
+    ListProjectOidcCommand, ProjectKeyImportCommand, ProjectKeyProjectCommand,
+    ProjectKeyRotateCommand, ProjectKeysCommand, ProjectOidcCommand, ProjectRetentionCommand,
+    ProjectsCommand, RemoveProjectOidcCommand, ResetProjectRetentionCommand, RetentionProfile,
     SetProjectRetentionCommand,
 };
 use crate::output;
@@ -33,6 +34,7 @@ pub async fn handle(
         ProjectsCommand::Retention(command) => {
             handle_retention(client, writer, json_output, command).await
         }
+        ProjectsCommand::Keys(command) => handle_keys(client, writer, json_output, command).await,
     }
 }
 
@@ -648,6 +650,105 @@ fn format_duration_seconds(seconds: u64) -> String {
     } else {
         format!("{seconds}s")
     }
+}
+
+async fn handle_keys(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ProjectKeysCommand,
+) -> Result<()> {
+    match command {
+        ProjectKeysCommand::Get(command) => {
+            get_project_key(client, writer, json_output, command).await
+        }
+        ProjectKeysCommand::Rotate(command) => {
+            rotate_project_key(client, writer, json_output, command).await
+        }
+        ProjectKeysCommand::Import(command) => {
+            import_project_key(client, writer, json_output, command).await
+        }
+    }
+}
+
+async fn get_project_key(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ProjectKeyProjectCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+
+    let response = client
+        .get_project_signing_key(&project)
+        .await
+        .with_context(|| format!("getting signing key for project {}", project.as_str()))?;
+
+    if json_output {
+        output::print_json(writer, &response)?;
+    } else if let Some(public_key) = response.public_key {
+        writeln!(writer, "{public_key}")?;
+    } else {
+        writeln!(writer, "project {} has no signing key", project.as_str())?;
+    }
+
+    Ok(())
+}
+
+async fn rotate_project_key(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ProjectKeyRotateCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+
+    let response = client
+        .generate_project_signing_key(&project, command.name)
+        .await
+        .with_context(|| format!("rotating signing key for project {}", project.as_str()))?;
+
+    if json_output {
+        output::print_json(writer, &response)?;
+    } else {
+        writeln!(
+            writer,
+            "rotated signing key for project {}",
+            project.as_str()
+        )?;
+        writeln!(writer, "public_key={}", response.public_key)?;
+    }
+
+    Ok(())
+}
+
+async fn import_project_key(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ProjectKeyImportCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+    let signing_key = std::fs::read_to_string(&command.file)
+        .with_context(|| format!("reading {}", command.file.display()))?;
+
+    let response = client
+        .import_project_signing_key(&project, command.name, signing_key)
+        .await
+        .with_context(|| format!("importing signing key for project {}", project.as_str()))?;
+
+    if json_output {
+        output::print_json(writer, &response)?;
+    } else {
+        writeln!(
+            writer,
+            "imported signing key for project {}",
+            project.as_str()
+        )?;
+        writeln!(writer, "public_key={}", response.public_key)?;
+    }
+
+    Ok(())
 }
 
 async fn project_exists(client: &CacheClient, project: &ProjectSlug) -> Result<bool> {

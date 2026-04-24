@@ -11,7 +11,9 @@ use cache_db::SqliteDatabase;
 use cache_store::upstream::{
     InMemoryUpstreamCacheClient, ReqwestUpstreamCacheClient, UpstreamCacheClient,
 };
-use cache_test_utils::{TestDatabase, TestServer, filesystem_backends_in, test_signing_keys};
+use cache_test_utils::{
+    TestDatabase, TestServer, filesystem_backends_in, fixtures::test_signing_key,
+};
 
 pub const WRITE_TOKEN: &str = "secret-token";
 
@@ -47,7 +49,8 @@ impl TestApp {
         let app = build_app_with_parts(
             db,
             StoreDir::default(),
-            test_signing_keys(),
+            Some(test_signing_key()),
+            None,
             filesystem_backends_in(&temp_dir),
             Some(LocalBackendName::fs()),
             Some(WRITE_TOKEN.to_owned()),

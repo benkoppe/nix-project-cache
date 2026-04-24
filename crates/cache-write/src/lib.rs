@@ -98,6 +98,7 @@ mod tests {
             Arc::new(ingest_service),
             Arc::new(gc_service),
             Arc::new(authorization_service),
+            None,
         );
 
         WriteTestApp {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
+use cache_core::key_crypto::KeyEncryptionKey;
 use cache_core::nix::StoreDir;
 use cache_core::signing::NamedSigningKey;
 use cache_core::storage::LocalBackendName;
@@ -15,7 +16,8 @@ pub struct AppConfig {
     pub db_path: PathBuf,
     pub store_dir: StoreDir,
     pub local_object_root: PathBuf,
-    pub signing_keys: Vec<NamedSigningKey>,
+    pub aggregate_signing_key: Option<NamedSigningKey>,
+    pub key_encryption_key: Option<KeyEncryptionKey>,
     pub write_token: Option<String>,
     pub oidc_config_path: Option<PathBuf>,
     pub writable_local_backend: Option<LocalBackendName>,
@@ -40,15 +42,27 @@ impl AppConfig {
             env::var("CACHE_OBJECT_ROOT").unwrap_or_else(|_| "./cache_objects".to_owned()),
         );
 
-        let signing_keys = match env::var("CACHE_SIGNING_KEYS") {
-            Ok(value) => value
-                .split(',')
-                .filter(|entry| !entry.trim().is_empty())
-                .map(|entry| NamedSigningKey::parse(entry.trim()).map_err(anyhow::Error::new))
-                .collect::<Result<Vec<_>>>()
-                .context("parsing CACHE_SIGNING_KEYS")?,
-            Err(_) => Vec::new(),
+        let aggregate_signing_key = match env::var("CACHE_AGGREGATE_SIGNING_KEY_FILE") {
+            Ok(path) if !path.trim().is_empty() => {
+                let path = PathBuf::from(path);
+                let raw = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                Some(
+                    NamedSigningKey::parse(raw.trim())
+                        .map_err(anyhow::Error::new)
+                        .with_context(|| {
+                            format!("parsing aggregate signing key from {}", path.display())
+                        })?,
+                )
+            }
+            _ => None,
         };
+
+        let key_encryption_key = env::var("CACHE_KEY_ENCRYPTION_KEY")
+            .ok()
+            .map(|value| KeyEncryptionKey::parse_base64(&value).map_err(anyhow::Error::new))
+            .transpose()
+            .context("parsing CACHE_KEY_ENCRYPTION_KEY")?;
 
         let write_token = env::var("CACHE_WRITE_TOKEN").ok();
         let oidc_config_path = env::var("CACHE_OIDC_CONFIG").ok().map(PathBuf::from);
@@ -68,7 +82,8 @@ impl AppConfig {
             db_path,
             store_dir,
             local_object_root,
-            signing_keys,
+            aggregate_signing_key,
+            key_encryption_key,
             write_token,
             oidc_config_path,
             writable_local_backend,

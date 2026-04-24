@@ -1,5 +1,6 @@
 mod cli;
 mod gc;
+mod keys;
 mod output;
 mod pins;
 mod projects;
@@ -27,6 +28,12 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
+    let mut stdout = std::io::stdout();
+
+    if let Command::Keys(command) = command {
+        return keys::handle(&mut stdout, json, command).await;
+    }
+
     let server =
         server.ok_or_else(|| anyhow::anyhow!("--server or CACHE_SERVER_URL is required"))?;
 
@@ -36,13 +43,12 @@ async fn main() -> Result<()> {
     let client = CacheClient::new(&server, auth_token)
         .with_context(|| format!("creating client for {}", server))?;
 
-    let mut stdout = std::io::stdout();
-
     match command {
         Command::Projects(command) => projects::handle(&client, &mut stdout, json, command).await,
         Command::Tokens(command) => tokens::handle(&client, &mut stdout, json, command).await,
         Command::Pins(command) => pins::handle(&client, &mut stdout, json, command).await,
         Command::Upstreams(command) => upstreams::handle(&client, &mut stdout, json, command).await,
         Command::Gc(command) => gc::handle(&client, &mut stdout, json, command).await,
+        Command::Keys(_) => unreachable!("keys command handled before client construction"),
     }
 }

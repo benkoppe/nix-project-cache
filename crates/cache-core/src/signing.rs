@@ -22,6 +22,14 @@ pub enum ParseSigningKeyError {
 }
 
 #[derive(Debug, Error)]
+pub enum GenerateSigningKeyError {
+    #[error("empty key name")]
+    EmptyName,
+    #[error("failed to generate signing key seed: {0}")]
+    Random(String),
+}
+
+#[derive(Debug, Error)]
 pub enum FingerprintError {
     #[error("store path is not inside configured store dir {store_dir}: {path}")]
     InvalidStorePath { store_dir: String, path: String },
@@ -96,6 +104,39 @@ impl NamedSigningKey {
             base64::engine::general_purpose::STANDARD.encode(public_key.as_bytes());
 
         format!("{}:{public_key_text}", self.name)
+    }
+
+    pub fn generate(name: &str) -> Result<Self, GenerateSigningKeyError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(GenerateSigningKeyError::EmptyName);
+        }
+
+        let mut seed = [0_u8; 32];
+        getrandom::fill(&mut seed)
+            .map_err(|error| GenerateSigningKeyError::Random(error.to_string()))?;
+
+        Ok(Self {
+            name: name.to_owned(),
+            key: SigningKey::from_bytes(&seed),
+        })
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Result<Self, ParseSigningKeyError> {
+        let name = name.into();
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(ParseSigningKeyError::EmptyName);
+        }
+
+        self.name = name.to_owned();
+        Ok(self)
+    }
+
+    pub fn private_key_text(&self) -> String {
+        let seed_text = base64::engine::general_purpose::STANDARD.encode(self.key.to_bytes());
+        format!("{}:{seed_text}", self.name)
     }
 }
 

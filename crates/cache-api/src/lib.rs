@@ -5,6 +5,7 @@ pub mod oidc_identities;
 pub mod pins;
 pub mod projects;
 pub mod retention;
+pub mod signing_keys;
 pub mod upstreams;
 
 pub use access_tokens::{AccessTokenInfo, CreateAccessTokenRequest, CreateAccessTokenResponse};
@@ -20,5 +21,9 @@ pub use pins::{CreatePinRequest, PinInfo};
 pub use projects::{ProjectInfo, UpsertProjectRequest};
 pub use retention::{
     ProjectRetentionPolicyInfo, ProjectRetentionRuleInfo, UpsertProjectRetentionPolicyRequest,
+};
+pub use signing_keys::{
+    GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest, ProjectSigningKeyInfo,
+    ProjectSigningKeyResponse,
 };
 pub use upstreams::{UpsertUpstreamRequest, UpstreamInfo};

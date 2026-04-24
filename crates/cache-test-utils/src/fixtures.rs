@@ -90,11 +90,9 @@ pub fn goodbye_path() -> SamplePath {
     }
 }
 
-pub fn test_signing_keys() -> Vec<NamedSigningKey> {
-    vec![
-        NamedSigningKey::parse("cache.example.com-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
-    ]
+pub fn test_signing_key() -> NamedSigningKey {
+    NamedSigningKey::parse("cache.example.com-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        .unwrap()
 }
 
 pub fn sample_upstream(base_url: impl Into<String>) -> UpstreamCache {

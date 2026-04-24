@@ -15,18 +15,19 @@ pub async fn health() -> impl IntoResponse {
 }
 
 pub async fn aggregate_cache_info(State(state): State<ReadAppState>) -> Response {
-    cache_info_response(&state)
+    cache_info_response(&state, &CacheView::Aggregate).await
 }
 
 pub async fn project_cache_info(
     Path(project): Path<String>,
     State(state): State<ReadAppState>,
 ) -> Response {
-    if ProjectSlug::parse(&project).is_err() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
 
-    cache_info_response(&state)
+    cache_info_response(&state, &CacheView::Project(project)).await
 }
 
 pub async fn aggregate_object(
@@ -48,15 +49,21 @@ pub async fn project_object(
     serve_object(CacheView::Project(project), &object, &state).await
 }
 
-fn cache_info_response(state: &ReadAppState) -> Response {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; charset=utf-8"),
-        )],
-        state.nix_cache_info_text(),
-    )
-        .into_response()
+async fn cache_info_response(state: &ReadAppState, view: &CacheView) -> Response {
+    match state.nix_cache_info_text(view).await {
+        Ok(text) => (
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            )],
+            text,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(?error, "failed to render nix-cache-info");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn serve_object(view: CacheView, object: &str, state: &ReadAppState) -> Response {

@@ -13,13 +13,16 @@ use uuid::Uuid;
 
 use cache_api::{
     AccessTokenInfo, BeginBuildRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
-    CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest, PinInfo, ProjectInfo,
+    CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest,
+    GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest, PinInfo, ProjectInfo,
     ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo, ProjectRetentionRuleInfo,
-    RegisterPathsRequest, RunGcRequest, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
-    UpsertProjectRetentionPolicyRequest, UpsertUpstreamRequest, UpstreamInfo,
+    ProjectSigningKeyInfo, ProjectSigningKeyResponse, RegisterPathsRequest, RunGcRequest,
+    UpsertProjectOidcIdentityRequest, UpsertProjectRequest, UpsertProjectRetentionPolicyRequest,
+    UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
+use cache_core::signing::NamedSigningKey;
 
 use crate::authz::{AuthorizationServiceError, AuthorizedPrincipal};
 use crate::state::WriteAppState;
@@ -430,7 +433,18 @@ pub async fn upsert_project(
         .insert_project(&project, &request.display_name, request.public)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(key_encryption_key) = &state.key_encryption_key
+                && let Err(error) = state
+                    .db
+                    .ensure_project_signing_key(&project, key_encryption_key)
+                    .await
+            {
+                tracing::error!(?error, "ensuring project signing key failed");
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => {
             tracing::error!(?error, "upsert_project failed");
             StatusCode::BAD_REQUEST.into_response()
@@ -711,6 +725,152 @@ fn retention_policy_info(
                 keep_builds: rule.keep_builds,
             })
             .collect(),
+    }
+}
+
+pub async fn get_project_signing_key(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.db.active_project_signing_key_public(&project).await {
+        Ok(public_key) => (
+            StatusCode::OK,
+            Json(ProjectSigningKeyInfo {
+                project: project.as_str().to_owned(),
+                public_key,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(?error, "get_project_signing_key failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn generate_project_signing_key(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<GenerateProjectSigningKeyRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let Some(key_encryption_key) = &state.key_encryption_key else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .generate_project_signing_key(&project, request.name.as_deref(), key_encryption_key)
+        .await
+    {
+        Ok(public_key) => (
+            StatusCode::OK,
+            Json(ProjectSigningKeyResponse {
+                project: project.as_str().to_owned(),
+                public_key,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(?error, "generate_project_signing_key failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn import_project_signing_key(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<ImportProjectSigningKeyRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let Some(key_encryption_key) = &state.key_encryption_key else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    let signing_key = match NamedSigningKey::parse(request.signing_key.trim()) {
+        Ok(key) => match request.name {
+            Some(name) => match key.with_name(name) {
+                Ok(key) => key,
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            },
+            None => key,
+        },
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .import_project_signing_key(&project, signing_key, key_encryption_key)
+        .await
+    {
+        Ok(public_key) => (
+            StatusCode::OK,
+            Json(ProjectSigningKeyResponse {
+                project: project.as_str().to_owned(),
+                public_key,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(?error, "import_project_signing_key failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
     }
 }
 

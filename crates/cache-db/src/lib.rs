@@ -7,6 +7,7 @@ mod paths;
 mod pins;
 mod pool;
 mod project_oidc_identities;
+mod project_signing_keys;
 mod projects;
 mod retention;
 mod upstreams;
@@ -14,7 +15,7 @@ mod upstreams;
 pub use models::{
     AccessTokenRecord, BuildContextRecord, BuildRecord, BuildStatus, PinRecord,
     ProjectOidcIdentityRecord, ProjectRecord, ProjectRetentionPolicyRecord,
-    ProjectRetentionRuleRecord, UpstreamCacheRecord,
+    ProjectRetentionRuleRecord, ProjectSigningKeyRecord, UpstreamCacheRecord,
 };
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;

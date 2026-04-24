@@ -52,6 +52,8 @@ jsonwebtoken = { version = "10", default-features = false, features = [
   "use_pem",
 ] }
 rsa = { version = "0.9", features = ["pem"] }
+chacha20poly1305 = "0.10"
+getrandom = "0.4"
 uuid = { version = "1", features = ["serde", "v7", "v4"] }
 sha2 = "0.11"
 base64 = "0.22"

@@ -50,6 +50,18 @@ pub fn write_router(state: WriteAppState) -> Router {
             delete(handlers::delete_project_retention_policy),
         )
         .route(
+            "/api/projects/{project}/signing-key",
+            get(handlers::get_project_signing_key),
+        )
+        .route(
+            "/api/projects/{project}/signing-key/generate",
+            post(handlers::generate_project_signing_key),
+        )
+        .route(
+            "/api/projects/{project}/signing-key/import",
+            post(handlers::import_project_signing_key),
+        )
+        .route(
             "/api/projects/{project}/upstreams",
             get(handlers::list_project_upstreams),
         )

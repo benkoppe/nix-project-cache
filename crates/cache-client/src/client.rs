@@ -8,10 +8,11 @@ use tokio_util::io::ReaderStream;
 use cache_api::{
     AccessTokenInfo, BeginBuildRequest, BeginBuildResponse, CreateAccessTokenRequest,
     CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
-    FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo,
-    ProjectRetentionPolicyInfo, RegisterPathsResponse, RunGcRequest, RunGcResponse,
-    UpsertProjectOidcIdentityRequest, UpsertProjectRequest, UpsertProjectRetentionPolicyRequest,
-    UpsertUpstreamRequest, UpstreamInfo,
+    FinalizeBuildResponse, GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest,
+    PinInfo, ProjectInfo, ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo,
+    ProjectSigningKeyInfo, ProjectSigningKeyResponse, RegisterPathsResponse, RunGcRequest,
+    RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    UpsertProjectRetentionPolicyRequest, UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
@@ -302,6 +303,47 @@ impl CacheClient {
             StatusCode::NOT_FOUND => Ok(false),
             status => Err(self.unexpected_status(response, status).await),
         }
+    }
+
+    pub async fn get_project_signing_key(
+        &self,
+        project: &ProjectSlug,
+    ) -> Result<ProjectSigningKeyInfo, CacheClientError> {
+        let url = routes::project_signing_key(&self.base_url, project)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn generate_project_signing_key(
+        &self,
+        project: &ProjectSlug,
+        name: Option<String>,
+    ) -> Result<ProjectSigningKeyResponse, CacheClientError> {
+        let url = routes::generate_project_signing_key(&self.base_url, project)?;
+        let response = self
+            .request(Method::POST, url)
+            .json(&GenerateProjectSigningKeyRequest { name })
+            .send()
+            .await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn import_project_signing_key(
+        &self,
+        project: &ProjectSlug,
+        name: Option<String>,
+        signing_key: String,
+    ) -> Result<ProjectSigningKeyResponse, CacheClientError> {
+        let url = routes::import_project_signing_key(&self.base_url, project)?;
+        let response = self
+            .request(Method::POST, url)
+            .json(&ImportProjectSigningKeyRequest { name, signing_key })
+            .send()
+            .await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
     }
 
     pub async fn list_upstreams(&self) -> Result<Vec<UpstreamInfo>, CacheClientError> {

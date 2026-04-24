@@ -32,6 +32,9 @@ pub enum Command {
     Upstreams(UpstreamsCommand),
 
     #[command(subcommand)]
+    Keys(KeysCommand),
+
+    #[command(subcommand)]
     Gc(GcCommand),
 }
 
@@ -45,6 +48,9 @@ pub enum ProjectsCommand {
 
     #[command(subcommand)]
     Retention(ProjectRetentionCommand),
+
+    #[command(subcommand)]
+    Keys(ProjectKeysCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -146,6 +152,37 @@ pub enum RetentionProfile {
     Aggressive,
     Balanced,
     Conservative,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectKeysCommand {
+    Get(ProjectKeyProjectCommand),
+    Rotate(ProjectKeyRotateCommand),
+    Import(ProjectKeyImportCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct ProjectKeyProjectCommand {
+    pub project: String,
+}
+
+#[derive(Debug, Parser)]
+pub struct ProjectKeyRotateCommand {
+    pub project: String,
+
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct ProjectKeyImportCommand {
+    pub project: String,
+
+    #[arg(long)]
+    pub file: std::path::PathBuf,
+
+    #[arg(long)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -257,6 +294,23 @@ pub struct LinkProjectUpstreamCommand {
 
     #[arg(long)]
     pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KeysCommand {
+    Generate(GenerateKeyCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct GenerateKeyCommand {
+    #[arg(long)]
+    pub name: String,
+
+    #[arg(long)]
+    pub secret_file: std::path::PathBuf,
+
+    #[arg(long)]
+    pub public_file: std::path::PathBuf,
 }
 
 #[derive(Debug, Subcommand)]

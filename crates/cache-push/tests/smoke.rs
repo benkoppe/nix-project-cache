@@ -15,7 +15,7 @@ use cache_core::nix::parse_path_info_json;
 use cache_store::upstream::ReqwestUpstreamCacheClient;
 use cache_test_utils::{
     EXAMPLE_PROJECT_NAME, RecordedOidcTokenRequest, TestDatabase, TestGitHubActionsOidcServer,
-    TestServer, example_project, filesystem_backends_in, test_signing_keys,
+    TestServer, example_project, filesystem_backends_in, test_signing_key,
 };
 
 const WRITE_TOKEN: &str = "secret-token";
@@ -172,7 +172,8 @@ async fn cache_push_can_publish_and_read_back_path() -> Result<()> {
     let app = build_app_with_parts(
         fixture.db.clone(),
         cache_core::nix::StoreDir::default(),
-        test_signing_keys(),
+        Some(test_signing_key()),
+        None,
         filesystem_backends_in(&fixture.temp_dir),
         Some(cache_core::storage::LocalBackendName::fs()),
         Some(WRITE_TOKEN.to_owned()),
@@ -338,7 +339,8 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
     let app = build_app_with_authorizer(
         fixture.db.clone(),
         cache_core::nix::StoreDir::default(),
-        test_signing_keys(),
+        Some(test_signing_key()),
+        None,
         filesystem_backends_in(&fixture.temp_dir),
         Some(cache_core::storage::LocalBackendName::fs()),
         Arc::new(oidc_authorizer),
@@ -465,7 +467,8 @@ async fn cache_ctl_setup_then_cache_push_with_github_oidc_works() -> Result<()> 
     let app = build_app_with_authorizer(
         fixture.db.clone(),
         cache_core::nix::StoreDir::default(),
-        test_signing_keys(),
+        Some(test_signing_key()),
+        None,
         filesystem_backends_in(&fixture.temp_dir),
         Some(cache_core::storage::LocalBackendName::fs()),
         Arc::new(admin_and_oidc_authorizer(&oidc_server, audience)),
@@ -605,7 +608,8 @@ async fn cache_ctl_token_create_then_cache_push_with_project_token_enforces_ref_
     let app = build_app_with_parts(
         fixture.db.clone(),
         cache_core::nix::StoreDir::default(),
-        test_signing_keys(),
+        Some(test_signing_key()),
+        None,
         filesystem_backends_in(&fixture.temp_dir),
         Some(cache_core::storage::LocalBackendName::fs()),
         Some(WRITE_TOKEN.to_owned()),

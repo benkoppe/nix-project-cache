@@ -9,14 +9,15 @@ use cache_auth::{
     Authorizer, ChainAuthorizer, OidcAuthorizer, OidcConfig, ReqwestOidcHttpClient,
     StaticTokenAuthorizer,
 };
+use cache_core::key_crypto::KeyEncryptionKey;
 use cache_core::nix::StoreDir;
-use cache_core::signing::{NamedSigningKey, NarInfoSigner};
+use cache_core::signing::NamedSigningKey;
 use cache_core::storage::LocalBackendName;
 use cache_db::SqliteDatabase;
 use cache_ingest::{GcService, IngestService};
 use cache_read::{
-    DbBackedLocalObjectStore, DbNarInfoResolver, DbUpstreamSelector, ReadAppState, ReadService,
-    read_router,
+    DbBackedLocalObjectStore, DbNarInfoResolver, DbProjectSigningKeys, DbUpstreamSelector,
+    ReadAppState, ReadService, read_router,
 };
 use cache_store::local::LocalObjectBackendRegistry;
 use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
@@ -34,7 +35,8 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
     Ok(build_app_with_authorizer(
         db,
         config.store_dir.clone(),
-        config.signing_keys.clone(),
+        config.aggregate_signing_key.clone(),
+        config.key_encryption_key.clone(),
         config.local_object_backends(),
         config.writable_local_backend.clone(),
         authorizer,
@@ -45,7 +47,8 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
 pub fn build_app_with_parts(
     db: SqliteDatabase,
     store_dir: StoreDir,
-    signing_keys: Vec<NamedSigningKey>,
+    aggregate_signing_key: Option<NamedSigningKey>,
+    key_encryption_key: Option<KeyEncryptionKey>,
     local_backends: LocalObjectBackendRegistry,
     writable_local_backend: Option<LocalBackendName>,
     write_token: Option<String>,
@@ -54,7 +57,8 @@ pub fn build_app_with_parts(
     build_app_with_authorizer(
         db,
         store_dir,
-        signing_keys,
+        aggregate_signing_key,
+        key_encryption_key,
         local_backends,
         writable_local_backend,
         Arc::new(StaticTokenAuthorizer::new(write_token)),
@@ -65,17 +69,21 @@ pub fn build_app_with_parts(
 pub fn build_app_with_authorizer(
     db: SqliteDatabase,
     store_dir: StoreDir,
-    signing_keys: Vec<NamedSigningKey>,
+    aggregate_signing_key: Option<NamedSigningKey>,
+    key_encryption_key: Option<KeyEncryptionKey>,
     local_backends: LocalObjectBackendRegistry,
     writable_local_backend: Option<LocalBackendName>,
     authorizer: Arc<dyn Authorizer>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
 ) -> Router {
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
-    let signer = NarInfoSigner::new(store_dir.clone(), signing_keys);
 
     let local_objects = DbBackedLocalObjectStore::new(db.clone(), local_backends.clone());
     let upstream_selector = DbUpstreamSelector::new(db.clone());
+
+    let project_signing_keys = key_encryption_key
+        .clone()
+        .map(|key| DbProjectSigningKeys::new(db.clone(), key));
 
     let read_service = ReadService::new(
         Arc::new(DbNarInfoResolver::new(db.clone())),
@@ -83,7 +91,8 @@ pub fn build_app_with_authorizer(
         upstream_client.clone(),
         Arc::new(upstream_selector),
         renderer,
-        signer,
+        aggregate_signing_key.clone(),
+        project_signing_keys,
     );
 
     let ingest_service = IngestService::new(
@@ -104,6 +113,7 @@ pub fn build_app_with_authorizer(
         Arc::new(ingest_service),
         Arc::new(gc_service),
         Arc::new(authorization_service),
+        key_encryption_key,
     );
 
     read_router(read_state).merge(write_router(write_state))

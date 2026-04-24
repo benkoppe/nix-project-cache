@@ -86,6 +86,33 @@ pub fn project_retention(base_url: &Url, project: &ProjectSlug) -> Result<Url, C
     )
 }
 
+pub fn project_signing_key(base_url: &Url, project: &ProjectSlug) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/signing-key", project.as_str()),
+    )
+}
+
+pub fn generate_project_signing_key(
+    base_url: &Url,
+    project: &ProjectSlug,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/signing-key/generate", project.as_str()),
+    )
+}
+
+pub fn import_project_signing_key(
+    base_url: &Url,
+    project: &ProjectSlug,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/signing-key/import", project.as_str()),
+    )
+}
+
 pub fn upstreams(base_url: &Url) -> Result<Url, CacheClientError> {
     join(base_url, "api/upstreams")
 }
