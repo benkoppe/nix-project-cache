@@ -5,10 +5,14 @@ mod objects;
 mod paths;
 mod pins;
 mod pool;
+mod project_oidc_identities;
 mod projects;
 mod upstreams;
 
-pub use models::{BuildContextRecord, BuildRecord, BuildStatus, PinRecord, ProjectRecord};
+pub use models::{
+    BuildContextRecord, BuildRecord, BuildStatus, PinRecord, ProjectOidcIdentityRecord,
+    ProjectRecord,
+};
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;
 

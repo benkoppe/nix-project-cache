@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{AuthError, Authorizer, Principal};
+use crate::{AuthError, AuthenticatedIdentity, Authorizer};
 
 #[derive(Default)]
 pub struct ChainAuthorizer {
@@ -21,7 +21,10 @@ impl ChainAuthorizer {
 
 #[async_trait]
 impl Authorizer for ChainAuthorizer {
-    async fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError> {
+    async fn authorize_bearer(
+        &self,
+        bearer_token: Option<&str>,
+    ) -> Result<AuthenticatedIdentity, AuthError> {
         let mut saw_enabled = false;
         let mut saw_missing = false;
         let mut saw_invalid = false;
@@ -29,7 +32,7 @@ impl Authorizer for ChainAuthorizer {
 
         for authorizer in &self.authorizers {
             match authorizer.authorize_bearer(bearer_token).await {
-                Ok(principal) => return Ok(principal),
+                Ok(identity) => return Ok(identity),
                 Err(AuthError::Disabled) => {}
                 Err(AuthError::MissingToken) => {
                     saw_enabled = true;
@@ -67,19 +70,20 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use serde_json::Map;
 
-    use crate::{AuthError, Authorizer, Principal};
+    use crate::{AuthError, AuthenticatedIdentity, Authorizer};
 
     use super::*;
 
-    struct StubAuthorizer(Result<Principal, AuthError>);
+    struct StubAuthorizer(Result<AuthenticatedIdentity, AuthError>);
 
     #[async_trait]
     impl Authorizer for StubAuthorizer {
         async fn authorize_bearer(
             &self,
             _bearer_token: Option<&str>,
-        ) -> Result<Principal, AuthError> {
+        ) -> Result<AuthenticatedIdentity, AuthError> {
             self.0.clone()
         }
     }
@@ -88,16 +92,18 @@ mod tests {
     async fn chain_authorizer_returns_first_success() {
         let mut chain = ChainAuthorizer::new();
         chain.push(Arc::new(StubAuthorizer(Err(AuthError::InvalidToken))));
-        chain.push(Arc::new(StubAuthorizer(Ok(Principal {
-            subject: "oidc-subject".to_owned(),
-            provider: Some("oidc".to_owned()),
-            project: None,
-            ref_name: Some("refs/heads/main".to_owned()),
-        }))));
+        chain.push(Arc::new(StubAuthorizer(Ok(AuthenticatedIdentity::oidc(
+            "github",
+            "repo:owner/repo:ref:refs/heads/main",
+            "https://token.actions.githubusercontent.com",
+            Some("owner/repo".to_owned()),
+            Some("refs/heads/main".to_owned()),
+            Map::new(),
+        )))));
 
-        let principal = chain.authorize_bearer(Some("token")).await.unwrap();
+        let identity = chain.authorize_bearer(Some("token")).await.unwrap();
 
-        assert_eq!(principal.subject, "oidc-subject");
+        assert_eq!(identity.subject, "repo:owner/repo:ref:refs/heads/main");
     }
 
     #[tokio::test]

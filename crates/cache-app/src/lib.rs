@@ -20,7 +20,7 @@ use cache_read::{
 };
 use cache_store::local::LocalObjectBackendRegistry;
 use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
-use cache_write::{WriteAppState, write_router};
+use cache_write::{AuthorizationService, WriteAppState, write_router};
 
 pub use config::AppConfig;
 
@@ -95,13 +95,14 @@ pub fn build_app_with_authorizer(
     );
 
     let gc_service = GcService::new(db.clone(), local_backends);
+    let authorization_service = AuthorizationService::new(db.clone(), authorizer);
 
     let read_state = ReadAppState::new(Arc::new(read_service), 30);
     let write_state = WriteAppState::new(
         db,
         Arc::new(ingest_service),
         Arc::new(gc_service),
-        authorizer,
+        Arc::new(authorization_service),
     );
 
     read_router(read_state).merge(write_router(write_state))

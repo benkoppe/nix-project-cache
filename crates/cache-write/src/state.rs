@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
-use cache_auth::Authorizer;
 use cache_db::SqliteDatabase;
 use cache_ingest::{GcService, IngestService};
+
+use crate::authz::AuthorizationService;
 
 #[derive(Clone)]
 pub struct WriteAppState {
     pub db: SqliteDatabase,
     pub ingest_service: Arc<IngestService>,
     pub gc_service: Arc<GcService>,
-    pub authorizer: Arc<dyn Authorizer>,
+    pub authorization_service: Arc<AuthorizationService>,
 }
 
 impl WriteAppState {
@@ -17,13 +18,13 @@ impl WriteAppState {
         db: SqliteDatabase,
         ingest_service: Arc<IngestService>,
         gc_service: Arc<GcService>,
-        authorizer: Arc<dyn Authorizer>,
+        authorization_service: Arc<AuthorizationService>,
     ) -> Self {
         Self {
             db,
             ingest_service,
             gc_service,
-            authorizer,
+            authorization_service,
         }
     }
 }

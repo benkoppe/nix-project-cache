@@ -1,21 +1,23 @@
+use std::collections::BTreeMap;
 use std::io;
 
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 use cache_api::{
-    BeginBuildRequest, CreatePinRequest, FinalizeBuildRequest, PinInfo, ProjectInfo,
-    RegisterPathsRequest, RunGcRequest, UpsertProjectRequest,
+    BeginBuildRequest, CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest,
+    PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsRequest, RunGcRequest,
+    UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
 };
-use cache_auth::{AuthError, Authorizer};
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
 
+use crate::authz::{AuthorizationServiceError, AuthorizedPrincipal};
 use crate::state::WriteAppState;
 
 #[derive(Debug, Deserialize)]
@@ -25,11 +27,25 @@ pub struct PinQuery {
 
 pub async fn begin_build(
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Json(request): Json<BeginBuildRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    let project = match ProjectSlug::parse(&request.project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(error) = principal.require_project_ref(&project, &request.ref_name) {
+        return authorization_error_response(error);
     }
 
     match state.ingest_service.begin_build(request).await {
@@ -44,11 +60,25 @@ pub async fn begin_build(
 pub async fn register_paths(
     Path(build_id): Path<String>,
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Json(mut request): Json<RegisterPathsRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    let build_id_uuid = match Uuid::parse_str(&build_id) {
+        Ok(build_id) => build_id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(response) = require_build_access(&state, &principal, build_id_uuid).await {
+        return response;
     }
 
     request.build_id = build_id;
@@ -67,14 +97,23 @@ pub async fn upload_object(
     State(state): State<WriteAppState>,
     request: Request,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, request.headers()).await {
-        return error.into_response();
-    }
+    let principal = match state
+        .authorization_service
+        .authorize_headers(request.headers())
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
     let build_id = match Uuid::parse_str(&build_id) {
         Ok(build_id) => build_id,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
+
+    if let Err(response) = require_build_access(&state, &principal, build_id).await {
+        return response;
+    }
 
     let Ok(store_path_hash) = StorePathHash::from_hash(&store_path_hash) else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -102,10 +141,24 @@ pub async fn upload_object(
 pub async fn finalize_build(
     Path(build_id): Path<String>,
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    let build_id_uuid = match Uuid::parse_str(&build_id) {
+        Ok(build_id) => build_id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(response) = require_build_access(&state, &principal, build_id_uuid).await {
+        return response;
     }
 
     match state
@@ -123,17 +176,30 @@ pub async fn finalize_build(
 
 pub async fn list_pins(
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Query(query): Query<PinQuery>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
-    }
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
     let project = match parse_optional_project(query.project.as_deref()) {
         Ok(project) => project,
         Err(status) => return status.into_response(),
     };
+
+    let permission = match &project {
+        Some(project) => principal.require_project(project),
+        None => principal.require_admin(),
+    };
+    if let Err(error) = permission {
+        return authorization_error_response(error);
+    }
 
     match state.db.list_pins(project.as_ref()).await {
         Ok(pins) => (
@@ -161,17 +227,30 @@ pub async fn list_pins(
 pub async fn create_pin(
     Path(name): Path<String>,
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Json(request): Json<CreatePinRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
-    }
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
     let project = match parse_optional_project(request.project.as_deref()) {
         Ok(project) => project,
         Err(status) => return status.into_response(),
     };
+
+    let permission = match &project {
+        Some(project) => principal.require_project(project),
+        None => principal.require_admin(),
+    };
+    if let Err(error) = permission {
+        return authorization_error_response(error);
+    }
 
     let store_path_hash = match StorePathHash::parse_from_store_path(&request.store_path) {
         Ok(hash) => hash,
@@ -199,17 +278,30 @@ pub async fn create_pin(
 pub async fn delete_pin(
     Path(name): Path<String>,
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Query(query): Query<PinQuery>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
-    }
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
     let project = match parse_optional_project(query.project.as_deref()) {
         Ok(project) => project,
         Err(status) => return status.into_response(),
     };
+
+    let permission = match &project {
+        Some(project) => principal.require_project(project),
+        None => principal.require_admin(),
+    };
+    if let Err(error) = permission {
+        return authorization_error_response(error);
+    }
 
     match state.db.delete_pin(&name, project.as_ref()).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -223,11 +315,20 @@ pub async fn delete_pin(
 
 pub async fn run_gc(
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Json(request): Json<RunGcRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
     }
 
     match state.gc_service.run_local_gc(request.dry_run).await {
@@ -239,9 +340,21 @@ pub async fn run_gc(
     }
 }
 
-pub async fn list_projects(State(state): State<WriteAppState>, headers: HeaderMap) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+pub async fn list_projects(
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
     }
 
     match state.db.list_projects().await {
@@ -269,11 +382,20 @@ pub async fn list_projects(State(state): State<WriteAppState>, headers: HeaderMa
 
 pub async fn upsert_project(
     State(state): State<WriteAppState>,
-    headers: HeaderMap,
+    headers: axum::http::HeaderMap,
     Json(request): Json<UpsertProjectRequest>,
 ) -> Response {
-    if let Err(error) = authorize(&*state.authorizer, &headers).await {
-        return error.into_response();
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
     }
 
     let project = match ProjectSlug::parse(&request.slug) {
@@ -294,35 +416,169 @@ pub async fn upsert_project(
     }
 }
 
-enum AuthorizeError {
-    ServiceUnavailable,
-    Unauthorized,
-}
+pub async fn list_project_oidc_identities(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
-impl IntoResponse for AuthorizeError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-            Self::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.db.list_project_oidc_identities(&project).await {
+        Ok(rows) => {
+            let mut grouped = BTreeMap::<(String, String), Vec<String>>::new();
+
+            for row in rows {
+                let key = (row.provider, row.repository);
+                let entry = grouped.entry(key).or_default();
+                if let Some(pattern) = row.ref_pattern {
+                    entry.push(pattern);
+                }
+            }
+
+            let items = grouped
+                .into_iter()
+                .map(|((provider, repository), mut ref_patterns)| {
+                    ref_patterns.sort();
+                    ref_patterns.dedup();
+                    ProjectOidcIdentityInfo {
+                        provider,
+                        repository,
+                        ref_patterns,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            (StatusCode::OK, Json(items)).into_response()
+        }
+        Err(error) => {
+            tracing::error!(?error, "list_project_oidc_identities failed");
+            StatusCode::BAD_REQUEST.into_response()
         }
     }
 }
 
-async fn authorize(authorizer: &dyn Authorizer, headers: &HeaderMap) -> Result<(), AuthorizeError> {
-    let bearer = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim);
+pub async fn upsert_project_oidc_identity(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<UpsertProjectOidcIdentityRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
 
-    match authorizer.authorize_bearer(bearer).await {
-        Ok(_) => Ok(()),
-        Err(AuthError::Disabled) | Err(AuthError::Unavailable(_)) => {
-            Err(AuthorizeError::ServiceUnavailable)
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .replace_project_oidc_identity(
+            &project,
+            &request.provider,
+            &request.repository,
+            &request.ref_patterns,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "upsert_project_oidc_identity failed");
+            StatusCode::BAD_REQUEST.into_response()
         }
-        Err(AuthError::MissingToken) | Err(AuthError::InvalidToken) => {
-            Err(AuthorizeError::Unauthorized)
+    }
+}
+
+pub async fn delete_project_oidc_identity(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<DeleteProjectOidcIdentityRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .delete_project_oidc_identity(&project, &request.provider, &request.repository)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "delete_project_oidc_identity failed");
+            StatusCode::BAD_REQUEST.into_response()
         }
+    }
+}
+
+async fn require_build_access(
+    state: &WriteAppState,
+    principal: &AuthorizedPrincipal,
+    build_id: Uuid,
+) -> Result<(), Response> {
+    let build_context = match state.db.get_build_context(build_id).await {
+        Ok(Some(context)) => context,
+        Ok(None) => return Err(StatusCode::BAD_REQUEST.into_response()),
+        Err(error) => {
+            tracing::error!(?error, build_id = %build_id, "failed to fetch build context");
+            return Err(StatusCode::BAD_REQUEST.into_response());
+        }
+    };
+
+    principal
+        .require_project_ref(&build_context.project_slug, &build_context.ref_name)
+        .map_err(authorization_error_response)
+}
+
+fn authorization_error_response(error: AuthorizationServiceError) -> Response {
+    match error {
+        AuthorizationServiceError::ServiceUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+        AuthorizationServiceError::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+        AuthorizationServiceError::Forbidden => StatusCode::FORBIDDEN.into_response(),
     }
 }
 

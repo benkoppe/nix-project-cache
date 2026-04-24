@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::{AuthError, Authorizer, Principal};
+use crate::{AuthError, AuthenticatedIdentity, Authorizer};
 
 #[derive(Debug, Clone)]
 pub struct StaticTokenAuthorizer {
@@ -15,7 +15,10 @@ impl StaticTokenAuthorizer {
 
 #[async_trait]
 impl Authorizer for StaticTokenAuthorizer {
-    async fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError> {
+    async fn authorize_bearer(
+        &self,
+        bearer_token: Option<&str>,
+    ) -> Result<AuthenticatedIdentity, AuthError> {
         let configured = self
             .configured_token
             .as_deref()
@@ -24,7 +27,7 @@ impl Authorizer for StaticTokenAuthorizer {
         let provided = bearer_token.ok_or(AuthError::MissingToken)?;
 
         if provided == configured {
-            Ok(Principal::static_token())
+            Ok(AuthenticatedIdentity::bootstrap_admin())
         } else {
             Err(AuthError::InvalidToken)
         }
@@ -33,16 +36,19 @@ impl Authorizer for StaticTokenAuthorizer {
 
 #[cfg(test)]
 mod tests {
+    use crate::IdentityKind;
+
     use super::*;
 
     #[tokio::test]
     async fn static_token_authorizes_matching_token() {
         let authorizer = StaticTokenAuthorizer::new(Some("secret".to_owned()));
 
-        let principal = authorizer.authorize_bearer(Some("secret")).await.unwrap();
+        let identity = authorizer.authorize_bearer(Some("secret")).await.unwrap();
 
-        assert_eq!(principal.subject, "static-token");
-        assert_eq!(principal.provider.as_deref(), Some("static-token"));
+        assert_eq!(identity.subject, "static-token");
+        assert_eq!(identity.provider.as_deref(), Some("static-token"));
+        assert_eq!(identity.kind, IdentityKind::BootstrapAdmin);
     }
 
     #[tokio::test]

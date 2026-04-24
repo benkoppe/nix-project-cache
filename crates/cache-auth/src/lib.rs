@@ -14,10 +14,13 @@ pub use error::AuthError;
 pub use oidc::OidcAuthorizer;
 pub use oidc_config::{ConfiguredOidcProvider, OidcConfig, OidcConfigError, OidcProviderConfig};
 pub use oidc_http::{OidcHttpClient, OidcHttpError, ReqwestOidcHttpClient, StaticOidcHttpClient};
-pub use principal::Principal;
+pub use principal::{AccessTokenIdentity, AuthenticatedIdentity, IdentityKind, OidcIdentity};
 pub use static_token::StaticTokenAuthorizer;
 
 #[async_trait]
 pub trait Authorizer: Send + Sync + 'static {
-    async fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError>;
+    async fn authorize_bearer(
+        &self,
+        bearer_token: Option<&str>,
+    ) -> Result<AuthenticatedIdentity, AuthError>;
 }

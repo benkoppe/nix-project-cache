@@ -9,12 +9,10 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use tokio::sync::RwLock;
 
-use cache_core::project::ProjectSlug;
-
 use crate::oidc_claims::{get_string_claim, validate_bound_claims, validate_bound_subject};
 use crate::oidc_config::{ConfiguredOidcProvider, OidcConfig, OidcProviderConfig};
 use crate::oidc_http::{OidcHttpClient, OidcHttpError};
-use crate::{AuthError, Authorizer, Principal};
+use crate::{AuthError, AuthenticatedIdentity, Authorizer};
 
 #[derive(Debug, Clone, Deserialize)]
 struct DiscoveryDocument {
@@ -109,7 +107,10 @@ impl OidcAuthorizer {
 
 #[async_trait]
 impl Authorizer for OidcAuthorizer {
-    async fn authorize_bearer(&self, bearer_token: Option<&str>) -> Result<Principal, AuthError> {
+    async fn authorize_bearer(
+        &self,
+        bearer_token: Option<&str>,
+    ) -> Result<AuthenticatedIdentity, AuthError> {
         let token = bearer_token.ok_or(AuthError::MissingToken)?;
         let unverified_claims = decode_claims_unverified(token)?;
         let issuer = get_string_claim(&unverified_claims, "iss").ok_or(AuthError::InvalidToken)?;
@@ -154,16 +155,17 @@ impl Authorizer for OidcAuthorizer {
             .map_err(|_| AuthError::InvalidToken)?;
 
         let subject = get_string_claim(&claims, "sub").ok_or(AuthError::InvalidToken)?;
+        let repository = get_string_claim(&claims, "repository");
         let ref_name = get_string_claim(&claims, "ref");
-        let project = get_string_claim(&claims, "project_slug")
-            .and_then(|slug| ProjectSlug::parse(&slug).ok());
 
-        Ok(Principal {
+        Ok(AuthenticatedIdentity::oidc(
+            provider.name,
             subject,
-            provider: Some(provider.name.to_owned()),
-            project,
+            provider_state.discovery.issuer,
+            repository,
             ref_name,
-        })
+            claims,
+        ))
     }
 }
 
@@ -205,7 +207,9 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
 
-    use crate::{OidcConfig, OidcProviderConfig, StaticOidcHttpClient};
+    use crate::{
+        AuthError, IdentityKind, OidcConfig, OidcIdentity, OidcProviderConfig, StaticOidcHttpClient,
+    };
 
     use super::*;
 
@@ -317,14 +321,31 @@ mod tests {
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
         let token = issue_token(&encoding_key, valid_claims());
 
-        let principal = authorizer.authorize_bearer(Some(&token)).await.unwrap();
+        let identity = authorizer.authorize_bearer(Some(&token)).await.unwrap();
 
-        assert_eq!(principal.subject, "repo:owner/repo:ref:refs/heads/main");
-        assert_eq!(principal.provider.as_deref(), Some("github"));
-        assert_eq!(principal.ref_name.as_deref(), Some("refs/heads/main"));
+        assert_eq!(identity.subject, "repo:owner/repo:ref:refs/heads/main");
+        assert_eq!(identity.provider.as_deref(), Some("github"));
         assert_eq!(
-            principal.project.as_ref().map(|project| project.as_str()),
-            Some("example_repo")
+            identity.kind,
+            IdentityKind::Oidc(OidcIdentity {
+                issuer: ISSUER.to_owned(),
+                repository: Some("owner/repo".to_owned()),
+                ref_name: Some("refs/heads/main".to_owned()),
+                claims: serde_json::json!({
+                    "iss": ISSUER,
+                    "aud": AUDIENCE,
+                    "sub": "repo:owner/repo:ref:refs/heads/main",
+                    "exp": 4_102_444_800usize,
+                    "nbf": 1_700_000_000usize,
+                    "iat": 1_700_000_000usize,
+                    "ref": "refs/heads/main",
+                    "repository": "owner/repo",
+                    "project_slug": "example_repo"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            })
         );
     }
 

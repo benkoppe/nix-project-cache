@@ -39,6 +39,42 @@ impl ProjectLookupRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProjectOidcIdentityLookupRow {
+    pub project_slug: String,
+    pub provider: String,
+    pub repository: String,
+    pub ref_pattern: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectOidcIdentityRecord {
+    pub project_slug: ProjectSlug,
+    pub provider: String,
+    pub repository: String,
+    pub ref_pattern: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+impl ProjectOidcIdentityLookupRow {
+    pub fn into_record(self) -> Result<ProjectOidcIdentityRecord> {
+        Ok(ProjectOidcIdentityRecord {
+            project_slug: ProjectSlug::parse(&self.project_slug)
+                .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.project_slug))?,
+            provider: self.provider,
+            repository: self.repository,
+            ref_pattern: if self.ref_pattern.is_empty() {
+                None
+            } else {
+                Some(self.ref_pattern)
+            },
+            created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
+                .context("parsing project_oidc_identity created_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UpstreamCacheLookupRow {
     pub id: String,
     pub name: String,

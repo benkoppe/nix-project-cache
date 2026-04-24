@@ -25,5 +25,17 @@ pub fn write_router(state: WriteAppState) -> Router {
         .route("/api/gc", post(handlers::run_gc))
         .route("/api/projects", get(handlers::list_projects))
         .route("/api/projects", post(handlers::upsert_project))
+        .route(
+            "/api/projects/{project}/oidc-identities",
+            get(handlers::list_project_oidc_identities),
+        )
+        .route(
+            "/api/projects/{project}/oidc-identities",
+            post(handlers::upsert_project_oidc_identity),
+        )
+        .route(
+            "/api/projects/{project}/oidc-identities",
+            delete(handlers::delete_project_oidc_identity),
+        )
         .with_state(state)
 }

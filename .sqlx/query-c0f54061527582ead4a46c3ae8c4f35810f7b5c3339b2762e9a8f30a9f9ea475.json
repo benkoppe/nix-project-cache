@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                p.slug AS project_slug,\n                i.provider,\n                i.repository,\n                i.ref_pattern,\n                i.created_at\n            FROM project_oidc_identities i\n            JOIN projects p ON p.id = i.project_id\n            WHERE i.provider = ? AND i.repository = ?\n            ORDER BY p.slug ASC, i.ref_pattern ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "project_slug",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "provider",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "repository",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "ref_pattern",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c0f54061527582ead4a46c3ae8c4f35810f7b5c3339b2762e9a8f30a9f9ea475"
+}
