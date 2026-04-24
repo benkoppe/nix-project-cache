@@ -9,7 +9,10 @@ pub struct Cli {
     pub server: String,
 
     #[arg(long, env = "CACHE_WRITE_TOKEN")]
-    pub auth_token: String,
+    pub auth_token: Option<String>,
+
+    #[arg(long, env = "CACHE_OIDC_AUDIENCE")]
+    pub oidc_audience: Option<String>,
 
     #[arg(long)]
     pub project: String,

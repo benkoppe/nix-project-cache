@@ -6,8 +6,9 @@ use tokio::io::AsyncRead;
 use tokio_util::io::ReaderStream;
 
 use cache_api::{
-    BeginBuildRequest, BeginBuildResponse, CreatePinRequest, FinalizeBuildResponse, PinInfo,
-    ProjectInfo, RegisterPathsResponse, RunGcRequest, RunGcResponse, UpsertProjectRequest,
+    BeginBuildRequest, BeginBuildResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
+    FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse,
+    RunGcRequest, RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
 };
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
@@ -221,6 +222,50 @@ impl CacheClient {
         self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
     }
 
+    pub async fn list_project_oidc_identities(
+        &self,
+        project: &ProjectSlug,
+    ) -> Result<Vec<ProjectOidcIdentityInfo>, CacheClientError> {
+        let url = routes::project_oidc_identities(&self.base_url, project)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn upsert_project_oidc_identity(
+        &self,
+        project: &ProjectSlug,
+        request: UpsertProjectOidcIdentityRequest,
+    ) -> Result<(), CacheClientError> {
+        let url = routes::project_oidc_identities(&self.base_url, project)?;
+        let response = self
+            .request(Method::POST, url)
+            .json(&request)
+            .send()
+            .await?;
+
+        self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn delete_project_oidc_identity(
+        &self,
+        project: &ProjectSlug,
+        request: DeleteProjectOidcIdentityRequest,
+    ) -> Result<bool, CacheClientError> {
+        let url = routes::project_oidc_identities(&self.base_url, project)?;
+        let response = self
+            .request(Method::DELETE, url)
+            .json(&request)
+            .send()
+            .await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
     fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
         self.http_client
             .request(method, url)
@@ -282,8 +327,9 @@ mod tests {
     use serde_json::json;
 
     use cache_api::{
-        BeginBuildRequest, BeginBuildResponse, CreatePinRequest, PinInfo, ProjectInfo,
-        RegisterPathsResponse, RunGcRequest, RunGcResponse, UpsertProjectRequest,
+        BeginBuildRequest, BeginBuildResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
+        PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse, RunGcRequest,
+        RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
     };
     use cache_core::project::ProjectSlug;
     use cache_test_utils::{
@@ -461,6 +507,74 @@ mod tests {
         )
     }
 
+    async fn list_project_oidc_identities_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path(project): Path<String>,
+    ) -> (StatusCode, Json<Vec<ProjectOidcIdentityInfo>>) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(project, EXAMPLE_PROJECT_SLUG);
+
+        (
+            StatusCode::OK,
+            Json(vec![ProjectOidcIdentityInfo {
+                provider: "github".to_owned(),
+                repository: "owner/repo".to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+            }]),
+        )
+    }
+
+    async fn upsert_project_oidc_identity_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path(project): Path<String>,
+        Json(request): Json<UpsertProjectOidcIdentityRequest>,
+    ) -> StatusCode {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(project, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(request.provider, "github");
+        assert_eq!(request.repository, "owner/repo");
+        assert_eq!(request.ref_patterns, vec!["refs/heads/main".to_owned()]);
+
+        StatusCode::NO_CONTENT
+    }
+
+    async fn delete_project_oidc_identity_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path(project): Path<String>,
+        Json(request): Json<DeleteProjectOidcIdentityRequest>,
+    ) -> StatusCode {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(project, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(request.provider, "github");
+        assert_eq!(request.repository, "owner/repo");
+
+        StatusCode::NO_CONTENT
+    }
+
     #[tokio::test]
     async fn begin_build_sends_auth_and_parses_response() {
         let state = TestState::default();
@@ -586,6 +700,72 @@ mod tests {
             &[
                 Some(EXAMPLE_PROJECT_SLUG.to_owned()),
                 Some(EXAMPLE_PROJECT_SLUG.to_owned())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn project_oidc_identity_methods_hit_expected_endpoints() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route(
+                "/api/projects/{project}/oidc-identities",
+                get(list_project_oidc_identities_handler),
+            )
+            .route(
+                "/api/projects/{project}/oidc-identities",
+                post(upsert_project_oidc_identity_handler),
+            )
+            .route(
+                "/api/projects/{project}/oidc-identities",
+                delete(delete_project_oidc_identity_handler),
+            )
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
+
+        let identities = client.list_project_oidc_identities(&project).await.unwrap();
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].provider, "github");
+        assert_eq!(identities[0].repository, "owner/repo");
+        assert_eq!(
+            identities[0].ref_patterns,
+            vec!["refs/heads/main".to_owned()]
+        );
+
+        client
+            .upsert_project_oidc_identity(
+                &project,
+                UpsertProjectOidcIdentityRequest {
+                    provider: "github".to_owned(),
+                    repository: "owner/repo".to_owned(),
+                    ref_patterns: vec!["refs/heads/main".to_owned()],
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            client
+                .delete_project_oidc_identity(
+                    &project,
+                    DeleteProjectOidcIdentityRequest {
+                        provider: "github".to_owned(),
+                        repository: "owner/repo".to_owned(),
+                    },
+                )
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(
+            state.auth_headers.lock().unwrap().as_slice(),
+            &[
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
             ]
         );
     }

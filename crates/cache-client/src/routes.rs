@@ -69,6 +69,16 @@ pub fn upsert_project(base_url: &Url) -> Result<Url, CacheClientError> {
     join(base_url, "api/projects")
 }
 
+pub fn project_oidc_identities(
+    base_url: &Url,
+    project: &ProjectSlug,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/oidc-identities", project.as_str()),
+    )
+}
+
 fn join(base_url: &Url, path: &str) -> Result<Url, CacheClientError> {
     base_url
         .join(path)

@@ -50,6 +50,7 @@ jsonwebtoken = { version = "10", default-features = false, features = [
   "rust_crypto",
   "use_pem",
 ] }
+rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 base64 = "0.22"
 hex = "0.4"
