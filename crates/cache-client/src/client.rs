@@ -363,9 +363,10 @@ mod tests {
     use serde_json::json;
 
     use cache_api::{
-        BeginBuildRequest, BeginBuildResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
-        PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse, RunGcRequest,
-        RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+        AccessTokenInfo, BeginBuildRequest, BeginBuildResponse, CreateAccessTokenRequest,
+        CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest, PinInfo,
+        ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse, RunGcRequest, RunGcResponse,
+        UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
     };
     use cache_core::project::ProjectSlug;
     use cache_test_utils::{
@@ -387,6 +388,8 @@ mod tests {
         project: Option<String>,
     }
 
+    const TOKEN_ID: &str = "token-123";
+    const ACCESS_TOKEN: &str = "npc_test_token";
     const BUILD_ID: &str = "build-123";
     const RELEASE_PIN_NAME: &str = "release";
     const RELEASE_STORE_PATH: &str = "/nix/store/example-release";
@@ -607,6 +610,88 @@ mod tests {
         assert_eq!(project, EXAMPLE_PROJECT_SLUG);
         assert_eq!(request.provider, "github");
         assert_eq!(request.repository, "owner/repo");
+
+        StatusCode::NO_CONTENT
+    }
+
+    async fn create_access_token_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Json(request): Json<CreateAccessTokenRequest>,
+    ) -> (StatusCode, Json<CreateAccessTokenResponse>) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(request.name, "ci-main");
+        assert_eq!(request.project, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(request.ref_patterns, vec!["refs/heads/main".to_owned()]);
+        assert_eq!(request.expires_at.as_deref(), Some("2030-01-01T00:00:00Z"));
+
+        (
+            StatusCode::OK,
+            Json(CreateAccessTokenResponse {
+                token: ACCESS_TOKEN.to_owned(),
+                info: AccessTokenInfo {
+                    id: TOKEN_ID.to_owned(),
+                    name: "ci-main".to_owned(),
+                    project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                    ref_patterns: vec!["refs/heads/main".to_owned()],
+                    created_at: "2026-04-20T00:00:00Z".to_owned(),
+                    expires_at: Some("2030-01-01T00:00:00Z".to_owned()),
+                    revoked_at: None,
+                },
+            }),
+        )
+    }
+
+    async fn list_access_tokens_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Query(query): Query<PinQuery>,
+    ) -> (StatusCode, Json<Vec<AccessTokenInfo>>) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(query.project.as_deref(), Some(EXAMPLE_PROJECT_SLUG));
+
+        (
+            StatusCode::OK,
+            Json(vec![AccessTokenInfo {
+                id: TOKEN_ID.to_owned(),
+                name: "ci-main".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+                created_at: "2026-04-20T00:00:00Z".to_owned(),
+                expires_at: None,
+                revoked_at: None,
+            }]),
+        )
+    }
+
+    async fn revoke_access_token_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path(token_id): Path<String>,
+    ) -> StatusCode {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(token_id, TOKEN_ID);
 
         StatusCode::NO_CONTENT
     }
@@ -864,6 +949,51 @@ mod tests {
         assert_eq!(
             state.uploaded_bodies.lock().unwrap().as_slice(),
             &[b"small".to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn access_token_methods_hit_expected_endpoints() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route("/api/access-tokens", post(create_access_token_handler))
+            .route("/api/access-tokens", get(list_access_tokens_handler))
+            .route(
+                "/api/access-tokens/{token_id}",
+                delete(revoke_access_token_handler),
+            )
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
+
+        let created = client
+            .create_access_token(CreateAccessTokenRequest {
+                name: "ci-main".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+                expires_at: Some("2030-01-01T00:00:00Z".to_owned()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(created.token, ACCESS_TOKEN);
+        assert_eq!(created.info.id, TOKEN_ID);
+
+        let tokens = client.list_access_tokens(Some(&project)).await.unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].name, "ci-main");
+
+        assert!(client.revoke_access_token(TOKEN_ID).await.unwrap());
+
+        assert_eq!(
+            state.auth_headers.lock().unwrap().as_slice(),
+            &[
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+            ]
         );
     }
 }

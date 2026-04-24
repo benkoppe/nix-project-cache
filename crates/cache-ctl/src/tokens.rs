@@ -136,3 +136,271 @@ fn print_tokens(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::{Path, Query, State};
+    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::routing::{delete, get, post};
+    use axum::{Json, Router};
+    use serde::Deserialize;
+
+    use cache_api::{CreateAccessTokenRequest, CreateAccessTokenResponse};
+    use cache_test_utils::{EXAMPLE_PROJECT_SLUG, TestServer};
+
+    use super::*;
+
+    const TOKEN_ID: &str = "token-123";
+    const ACCESS_TOKEN: &str = "npc_test_token";
+
+    #[derive(Default, Clone)]
+    struct TestState {
+        auth_headers: Arc<Mutex<Vec<String>>>,
+        create_requests: Arc<Mutex<Vec<CreateAccessTokenRequest>>>,
+        revoked_tokens: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TokenQuery {
+        project: Option<String>,
+    }
+
+    async fn create_token_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Json(request): Json<CreateAccessTokenRequest>,
+    ) -> (StatusCode, Json<CreateAccessTokenResponse>) {
+        record_auth_header(&state, &headers);
+        state.create_requests.lock().unwrap().push(request);
+
+        (
+            StatusCode::OK,
+            Json(CreateAccessTokenResponse {
+                token: ACCESS_TOKEN.to_owned(),
+                info: AccessTokenInfo {
+                    id: TOKEN_ID.to_owned(),
+                    name: "ci-main".to_owned(),
+                    project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                    ref_patterns: vec!["refs/heads/main".to_owned()],
+                    created_at: "2026-04-20T00:00:00Z".to_owned(),
+                    expires_at: None,
+                    revoked_at: None,
+                },
+            }),
+        )
+    }
+
+    async fn list_tokens_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Query(query): Query<TokenQuery>,
+    ) -> (StatusCode, Json<Vec<AccessTokenInfo>>) {
+        record_auth_header(&state, &headers);
+        assert_eq!(query.project.as_deref(), Some(EXAMPLE_PROJECT_SLUG));
+
+        (
+            StatusCode::OK,
+            Json(vec![AccessTokenInfo {
+                id: TOKEN_ID.to_owned(),
+                name: "ci-main".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+                created_at: "2026-04-20T00:00:00Z".to_owned(),
+                expires_at: None,
+                revoked_at: None,
+            }]),
+        )
+    }
+
+    async fn revoke_token_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path(token_id): Path<String>,
+    ) -> StatusCode {
+        record_auth_header(&state, &headers);
+        state.revoked_tokens.lock().unwrap().push(token_id);
+        StatusCode::NO_CONTENT
+    }
+
+    async fn missing_revoke_token_handler(Path(_token_id): Path<String>) -> StatusCode {
+        StatusCode::NOT_FOUND
+    }
+
+    fn record_auth_header(state: &TestState, headers: &HeaderMap) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+    }
+
+    fn client_for(server: &TestServer) -> CacheClient {
+        CacheClient::new(&server.base_url, "secret-token").unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_token_prints_token_and_sends_request() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route("/api/access-tokens", post(create_token_handler))
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = client_for(&server);
+
+        let mut output = Vec::new();
+
+        handle(
+            &client,
+            &mut output,
+            false,
+            TokensCommand::Create(CreateTokenCommand {
+                name: "ci-main".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+                expires_at: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let requests = state.create_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].name, "ci-main");
+        assert_eq!(requests[0].project, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(requests[0].ref_patterns, vec!["refs/heads/main".to_owned()]);
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("created token"));
+        assert!(output.contains(ACCESS_TOKEN));
+    }
+
+    #[tokio::test]
+    async fn create_token_prints_json() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route("/api/access-tokens", post(create_token_handler))
+            .with_state(state);
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = client_for(&server);
+
+        let mut output = Vec::new();
+
+        handle(
+            &client,
+            &mut output,
+            true,
+            TokensCommand::Create(CreateTokenCommand {
+                name: "ci-main".to_owned(),
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_patterns: vec!["refs/heads/main".to_owned()],
+                expires_at: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(value["token"], ACCESS_TOKEN);
+        assert_eq!(value["info"]["id"], TOKEN_ID);
+    }
+
+    #[tokio::test]
+    async fn list_tokens_prints_human_output() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route("/api/access-tokens", get(list_tokens_handler))
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = client_for(&server);
+
+        let mut output = Vec::new();
+
+        handle(
+            &client,
+            &mut output,
+            false,
+            TokensCommand::List(ListTokensCommand {
+                project: Some(EXAMPLE_PROJECT_SLUG.to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(TOKEN_ID));
+        assert!(output.contains("ci-main"));
+        assert!(output.contains(EXAMPLE_PROJECT_SLUG));
+        assert!(output.contains("refs=refs/heads/main"));
+    }
+
+    #[tokio::test]
+    async fn revoke_token_sends_request() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route(
+                "/api/access-tokens/{token_id}",
+                delete(revoke_token_handler),
+            )
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = client_for(&server);
+
+        let mut output = Vec::new();
+
+        handle(
+            &client,
+            &mut output,
+            false,
+            TokensCommand::Revoke(RevokeTokenCommand {
+                token_id: TOKEN_ID.to_owned(),
+                ignore_missing: false,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            state.revoked_tokens.lock().unwrap().as_slice(),
+            &[TOKEN_ID.to_owned()]
+        );
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("revoked token"));
+    }
+
+    #[tokio::test]
+    async fn revoke_token_ignore_missing_succeeds_for_not_found() {
+        let app = Router::new().route(
+            "/api/access-tokens/{token_id}",
+            delete(missing_revoke_token_handler),
+        );
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = client_for(&server);
+
+        let mut output = Vec::new();
+
+        handle(
+            &client,
+            &mut output,
+            false,
+            TokensCommand::Revoke(RevokeTokenCommand {
+                token_id: TOKEN_ID.to_owned(),
+                ignore_missing: true,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("already absent"));
+    }
+}

@@ -24,6 +24,12 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
+    let server =
+        server.ok_or_else(|| anyhow::anyhow!("--server or CACHE_SERVER_URL is required"))?;
+
+    let auth_token = auth_token
+        .ok_or_else(|| anyhow::anyhow!("--auth-token or CACHE_ADMIN_TOKEN is required"))?;
+
     let client = CacheClient::new(&server, auth_token)
         .with_context(|| format!("creating client for {}", server))?;
 

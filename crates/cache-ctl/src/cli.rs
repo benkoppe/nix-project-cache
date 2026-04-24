@@ -5,10 +5,10 @@ use clap::{Parser, Subcommand};
 #[command(about = "Manage nix-project-cache resources")]
 pub struct Cli {
     #[arg(long, env = "CACHE_SERVER_URL", global = true)]
-    pub server: String,
+    pub server: Option<String>,
 
     #[arg(long, env = "CACHE_ADMIN_TOKEN", global = true)]
-    pub auth_token: String,
+    pub auth_token: Option<String>,
 
     #[arg(long, global = true)]
     pub json: bool,
