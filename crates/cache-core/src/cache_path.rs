@@ -18,6 +18,36 @@ pub enum NarCompression {
     Bz2,
 }
 
+impl NarCompression {
+    pub fn from_narinfo_compression(value: &str) -> Option<Self> {
+        match value {
+            "" | "none" => Some(Self::Uncompressed),
+            "zstd" => Some(Self::Zstd),
+            "xz" => Some(Self::Xz),
+            "bzip2" | "bz2" => Some(Self::Bz2),
+            _ => None,
+        }
+    }
+
+    pub fn narinfo_compression(&self) -> &'static str {
+        match self {
+            Self::Uncompressed => "none",
+            Self::Zstd => "zstd",
+            Self::Xz => "xz",
+            Self::Bz2 => "bzip2",
+        }
+    }
+
+    pub fn file_suffix(&self) -> &'static str {
+        match self {
+            Self::Uncompressed => ".nar",
+            Self::Zstd => ".nar.zst",
+            Self::Xz => ".nar.xz",
+            Self::Bz2 => ".nar.bz2",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheObjectPath {
     NixCacheInfo,

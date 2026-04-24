@@ -4,4 +4,5 @@ pub mod nix;
 pub mod project;
 pub mod signing;
 pub mod storage;
+pub mod validation;
 pub mod view;

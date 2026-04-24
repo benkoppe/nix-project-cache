@@ -30,6 +30,7 @@ mod tests {
         AuthError, AuthenticatedIdentity, Authorizer, OidcAuthorizer, OidcConfig,
         OidcProviderConfig, StaticOidcHttpClient, StaticTokenAuthorizer,
     };
+    use cache_core::nix::StoreDir;
     use cache_core::storage::LocalBackendName;
     use cache_db::SqliteDatabase;
     use cache_ingest::{GcService, IngestService};
@@ -82,6 +83,7 @@ mod tests {
 
         let ingest_service = IngestService::new(
             fixture.db.clone(),
+            StoreDir::default(),
             Arc::new(InMemoryLocalObjectStore::new()),
             backends.clone(),
             Some(LocalBackendName::fs()),

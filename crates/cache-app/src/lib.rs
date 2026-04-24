@@ -72,7 +72,7 @@ pub fn build_app_with_authorizer(
     upstream_client: Arc<dyn UpstreamCacheClient>,
 ) -> Router {
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
-    let signer = NarInfoSigner::new(store_dir, signing_keys);
+    let signer = NarInfoSigner::new(store_dir.clone(), signing_keys);
 
     let local_objects = DbBackedLocalObjectStore::new(db.clone(), local_backends.clone());
     let upstream_selector = DbUpstreamSelector::new(db.clone());
@@ -88,6 +88,7 @@ pub fn build_app_with_authorizer(
 
     let ingest_service = IngestService::new(
         db.clone(),
+        store_dir.clone(),
         Arc::new(local_objects),
         local_backends.clone(),
         writable_local_backend,

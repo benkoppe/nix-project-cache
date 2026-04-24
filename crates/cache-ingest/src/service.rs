@@ -8,9 +8,11 @@ use cache_api::{
     RegisterPathsRequest, RegisterPathsResponse,
 };
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
-use cache_core::nix::StorePathHash;
+use cache_core::narinfo::NarInfo;
+use cache_core::nix::{StoreDir, StorePathHash};
 use cache_core::project::ProjectSlug;
 use cache_core::storage::{LocalBackendName, PathObjectKind};
+use cache_core::validation::validate_publish_narinfo;
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
 use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore, LocalUploadReader};
@@ -21,6 +23,7 @@ use crate::planner::plan_required_uploads;
 #[derive(Clone)]
 pub struct IngestService {
     db: SqliteDatabase,
+    store_dir: StoreDir,
     local_store: Arc<dyn LocalObjectStore>,
     local_backends: LocalObjectBackendRegistry,
     writable_local_backend: Option<LocalBackendName>,
@@ -30,6 +33,7 @@ pub struct IngestService {
 impl IngestService {
     pub fn new(
         db: SqliteDatabase,
+        store_dir: StoreDir,
         local_store: Arc<dyn LocalObjectStore>,
         local_backends: LocalObjectBackendRegistry,
         writable_local_backend: Option<LocalBackendName>,
@@ -37,6 +41,7 @@ impl IngestService {
     ) -> Self {
         Self {
             db,
+            store_dir,
             local_store,
             local_backends,
             writable_local_backend,
@@ -76,10 +81,8 @@ impl IngestService {
         let mut narinfos = Vec::with_capacity(request.paths.len());
 
         for path in request.paths {
-            let narinfo = cache_core::narinfo::NarInfo::try_from(path)?;
-            let store_path_hash =
-                cache_core::nix::StorePathHash::parse_from_store_path(&narinfo.store_path)
-                    .context("deriving store_path_hash from registered path")?;
+            let narinfo = NarInfo::try_from(path)?;
+            let store_path_hash = validate_publish_narinfo(&self.store_dir, &narinfo)?;
 
             self.db.upsert_path_info(&narinfo).await?;
             self.db
@@ -272,6 +275,7 @@ mod tests {
     use uuid::Uuid;
 
     use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
+    use cache_core::nix::StoreDir;
     use cache_core::storage::{LocalBackendName, PathObjectKind};
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_read::DbBackedLocalObjectStore;
@@ -296,6 +300,7 @@ mod tests {
 
         let service = IngestService::new(
             fixture.db.clone(),
+            StoreDir::default(),
             Arc::new(local_store),
             backends,
             writable_local_backend,
@@ -303,6 +308,32 @@ mod tests {
         );
 
         (service, fixture.db, fixture.temp_dir)
+    }
+
+    async fn begin_example_build(service: &IngestService) -> String {
+        service
+            .begin_build(BeginBuildRequest {
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_name: "refs/heads/main".to_owned(),
+                revision: Some("deadbeef".to_owned()),
+            })
+            .await
+            .unwrap()
+            .build_id
+    }
+
+    async fn register_single_path_error(
+        service: &IngestService,
+        payload: cache_api::NarInfoPayload,
+    ) -> anyhow::Error {
+        let build_id = begin_example_build(service).await;
+        service
+            .register_paths(RegisterPathsRequest {
+                build_id,
+                paths: vec![payload],
+            })
+            .await
+            .unwrap_err()
     }
 
     #[tokio::test]
@@ -487,5 +518,94 @@ mod tests {
                 .to_string()
                 .contains("no writable local backend is configured")
         )
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_store_path_outside_store_dir() {
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
+
+        let mut payload = hello_path().payload();
+        payload.store_path = "/tmp/not-in-store".to_owned();
+
+        let error = register_single_path_error(&service, payload).await;
+
+        assert!(
+            error.to_string().contains("not inside store dir"),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_url_that_does_not_match_nar_hash() {
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
+
+        let mut payload = hello_path().payload();
+        payload.url = "nar/1111111111111111111111111111111111111111111111111111.nar.zst".to_owned();
+
+        let error = register_single_path_error(&service, payload).await;
+
+        assert!(
+            error.to_string().contains("does not match expected URL"),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_compression_that_does_not_match_url() {
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
+
+        let mut payload = hello_path().payload();
+        payload.compression = "xz".to_owned();
+
+        let error = register_single_path_error(&service, payload).await;
+
+        assert!(
+            error.to_string().contains("does not match URL compression"),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_reference_outside_store_dir() {
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
+
+        let mut payload = hello_path().payload();
+        payload.references = vec!["/tmp/not-in-store".to_owned()];
+
+        let error = register_single_path_error(&service, payload).await;
+
+        assert!(error.to_string().contains("reference"), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn register_paths_rejects_deriver_outside_store_dir() {
+        let (service, _db, _tmp) = build_service(
+            InMemoryUpstreamCacheClient::new(),
+            Some(LocalBackendName::fs()),
+        )
+        .await;
+
+        let mut payload = hello_path().payload();
+        payload.deriver = Some("/tmp/not-in-store.drv".to_owned());
+
+        let error = register_single_path_error(&service, payload).await;
+
+        assert!(error.to_string().contains("deriver"), "{error:?}");
     }
 }
