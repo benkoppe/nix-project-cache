@@ -135,7 +135,7 @@ impl fmt::Display for StoreDir {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StorePathHash(String);
 
 impl StorePathHash {

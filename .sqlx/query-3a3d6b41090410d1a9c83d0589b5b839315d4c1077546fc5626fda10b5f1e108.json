@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                SELECT store_path_hash\n                FROM build_paths\n                WHERE build_id = ?\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "store_path_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3a3d6b41090410d1a9c83d0589b5b839315d4c1077546fc5626fda10b5f1e108"
+}

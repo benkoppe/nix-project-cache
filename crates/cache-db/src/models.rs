@@ -352,3 +352,83 @@ impl PinLookupRow {
         })
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct ProjectRetentionPolicyLookupRow {
+    pub project_slug: String,
+    pub inherited_default: i64,
+    pub keep_latest_builds_per_ref: i64,
+    pub object_delete_grace_seconds: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRetentionRuleLookupRow {
+    pub priority: i64,
+    pub ref_pattern: String,
+    pub ttl_seconds: Option<i64>,
+    pub keep_builds: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRetentionPolicyRecord {
+    pub project_slug: ProjectSlug,
+    pub inherited_default: bool,
+    pub keep_latest_builds_per_ref: u32,
+    pub object_delete_grace_seconds: u64,
+    pub rules: Vec<ProjectRetentionRuleRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRetentionRuleRecord {
+    pub priority: u32,
+    pub ref_pattern: String,
+    pub ttl_seconds: Option<u64>,
+    pub keep_builds: Option<u32>,
+}
+
+impl ProjectRetentionPolicyLookupRow {
+    pub fn into_record(
+        self,
+        rules: Vec<ProjectRetentionRuleRecord>,
+    ) -> Result<ProjectRetentionPolicyRecord> {
+        Ok(ProjectRetentionPolicyRecord {
+            project_slug: ProjectSlug::parse(&self.project_slug)
+                .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.project_slug))?,
+            inherited_default: self.inherited_default != 0,
+            keep_latest_builds_per_ref: u32::try_from(self.keep_latest_builds_per_ref)
+                .context("converting keep_latest_builds_per_ref")?,
+            object_delete_grace_seconds: u64::try_from(self.object_delete_grace_seconds)
+                .context("converting object_delete_grace_seconds")?,
+            rules,
+        })
+    }
+}
+
+impl ProjectRetentionRuleLookupRow {
+    pub fn into_record(self) -> Result<ProjectRetentionRuleRecord> {
+        Ok(ProjectRetentionRuleRecord {
+            priority: u32::try_from(self.priority).context("converting retention priority")?,
+            ref_pattern: self.ref_pattern,
+            ttl_seconds: self
+                .ttl_seconds
+                .map(|value| u64::try_from(value).context("converting retention ttl_seconds"))
+                .transpose()?,
+            keep_builds: self
+                .keep_builds
+                .map(|value| u32::try_from(value).context("converting retention keep_builds"))
+                .transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRefRetentionRow {
+    pub project_slug: String,
+    pub ref_name: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RetainedBuildLookupRow {
+    pub build_id: String,
+}

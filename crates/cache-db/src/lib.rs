@@ -8,14 +8,17 @@ mod pins;
 mod pool;
 mod project_oidc_identities;
 mod projects;
+mod retention;
 mod upstreams;
 
 pub use models::{
     AccessTokenRecord, BuildContextRecord, BuildRecord, BuildStatus, PinRecord,
-    ProjectOidcIdentityRecord, ProjectRecord,
+    ProjectOidcIdentityRecord, ProjectRecord, ProjectRetentionPolicyRecord,
+    ProjectRetentionRuleRecord,
 };
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;
+pub use retention::default_retention_rules;
 
 #[cfg(test)]
 mod tests {
@@ -360,5 +363,81 @@ mod tests {
 
         assert!(row.deleted_at.is_none());
         assert!(row.first_deleted_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn project_retention_policy_defaults_and_override_round_trip() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+        let project = ProjectSlug::parse("example_repo").unwrap();
+
+        db.insert_project(&project, "Example Repo", true)
+            .await
+            .unwrap();
+
+        let default_policy = db.get_project_retention_policy(&project).await.unwrap();
+        assert!(default_policy.inherited_default);
+        assert_eq!(default_policy.keep_latest_builds_per_ref, 2);
+        assert!(
+            default_policy
+                .rules
+                .iter()
+                .any(|rule| rule.ref_pattern == "refs/pull/*")
+        );
+
+        db.replace_project_retention_policy(
+            &project,
+            3,
+            3600,
+            &[crate::ProjectRetentionRuleRecord {
+                priority: 10,
+                ref_pattern: "*".to_owned(),
+                ttl_seconds: Some(7 * 24 * 60 * 60),
+                keep_builds: Some(1),
+            }],
+        )
+        .await
+        .unwrap();
+
+        let custom_policy = db.get_project_retention_policy(&project).await.unwrap();
+        assert!(!custom_policy.inherited_default);
+        assert_eq!(custom_policy.keep_latest_builds_per_ref, 3);
+        assert_eq!(custom_policy.object_delete_grace_seconds, 3600);
+        assert_eq!(custom_policy.rules.len(), 1);
+
+        assert!(db.delete_project_retention_policy(&project).await.unwrap());
+
+        let reset_policy = db.get_project_retention_policy(&project).await.unwrap();
+        assert!(reset_policy.inherited_default);
+    }
+
+    #[tokio::test]
+    async fn gc_retains_latest_builds_for_active_refs_according_to_policy() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+        let project = ProjectSlug::parse("example_repo").unwrap();
+        db.insert_project(&project, "Example Repo", true)
+            .await
+            .unwrap();
+        let narinfo = sample_narinfo();
+        let hash = sample_hash();
+        db.upsert_path_info(&narinfo).await.unwrap();
+        let old_build = db
+            .begin_build(&project, "refs/heads/main", None)
+            .await
+            .unwrap();
+        db.attach_build_path(old_build.id, &hash).await.unwrap();
+        db.publish_build_to_ref(&project, "refs/heads/main", old_build.id)
+            .await
+            .unwrap();
+        let new_build = db
+            .begin_build(&project, "refs/heads/main", None)
+            .await
+            .unwrap();
+        db.attach_build_path(new_build.id, &hash).await.unwrap();
+        db.publish_build_to_ref(&project, "refs/heads/main", new_build.id)
+            .await
+            .unwrap();
+        let retained = db.list_retained_build_ids_for_gc().await.unwrap();
+        assert!(retained.contains(&old_build.id.to_string()));
+        assert!(retained.contains(&new_build.id.to_string()));
     }
 }

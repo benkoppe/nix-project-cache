@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO project_retention_policies (\n                project_id,\n                keep_latest_builds_per_ref,\n                object_delete_grace_seconds\n            )\n            VALUES (?, ?, ?)\n            ON CONFLICT(project_id) DO UPDATE SET\n                keep_latest_builds_per_ref = excluded.keep_latest_builds_per_ref,\n                object_delete_grace_seconds = excluded.object_delete_grace_seconds,\n                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "cc48b3b99e5f50242d87692451fa7b2999aee838043d25b0513279bbdd8122d7"
+}
