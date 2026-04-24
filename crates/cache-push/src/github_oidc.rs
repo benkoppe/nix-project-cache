@@ -7,7 +7,10 @@ struct GitHubOidcTokenResponse {
     value: String,
 }
 
-pub async fn request_github_actions_oidc_token(audience: &str) -> Result<String> {
+pub async fn request_github_actions_oidc_token(
+    client: &reqwest::Client,
+    audience: &str,
+) -> Result<String> {
     let request_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL")
         .context("CACHE_WRITE_TOKEN is unset and ACTIONS_ID_TOKEN_REQUEST_URL is unavailable")?;
     let request_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
@@ -17,7 +20,7 @@ pub async fn request_github_actions_oidc_token(audience: &str) -> Result<String>
         .with_context(|| format!("parsing ACTIONS_ID_TOKEN_REQUEST_URL {request_url:?}"))?;
     url.query_pairs_mut().append_pair("audience", audience);
 
-    let response = reqwest::Client::new()
+    let response = client
         .get(url)
         .bearer_auth(request_token)
         .send()

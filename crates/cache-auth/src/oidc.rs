@@ -207,13 +207,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use base64::Engine as _;
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
-    use rsa::traits::PublicKeyParts;
-    use rsa::{RsaPrivateKey, RsaPublicKey};
-    use serde::Serialize;
-    use serde_json::json;
+    use cache_test_utils::{TestOidcClaims, TestOidcIssuer};
 
     use crate::{
         AuthError, IdentityKind, OidcConfig, OidcIdentity, OidcProviderConfig, StaticOidcHttpClient,
@@ -223,27 +217,7 @@ mod tests {
 
     const ISSUER: &str = "https://token.actions.githubusercontent.com";
     const AUDIENCE: &str = "https://cache.example.com";
-    const DISCOVERY_URL: &str =
-        "https://token.actions.githubusercontent.com/.well-known/openid-configuration";
-    const JWKS_URL: &str = "https://token.actions.githubusercontent.com/.well-known/jwks";
     const TEST_KID: &str = "test-kid-1";
-
-    #[derive(Debug, Clone, Serialize)]
-    struct TestClaims {
-        iss: String,
-        aud: String,
-        sub: String,
-        exp: usize,
-        nbf: usize,
-        iat: usize,
-        r#ref: String,
-        repository: String,
-        project_slug: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        project_path: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        git_ref: Option<String>,
-    }
 
     fn oidc_config() -> OidcConfig {
         OidcConfig {
@@ -282,77 +256,29 @@ mod tests {
         }
     }
 
-    fn build_test_http_client() -> (StaticOidcHttpClient, EncodingKey) {
-        let mut rng = rsa::rand_core::OsRng;
-        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-        let public_key = RsaPublicKey::from(&private_key);
-
-        let private_pem = private_key
-            .to_pkcs8_pem(LineEnding::LF)
-            .unwrap()
-            .to_string();
-
-        let n =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
-        let e =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
-
-        let discovery = json!({
-            "issuer": ISSUER,
-            "jwks_uri": JWKS_URL,
-        });
-
-        let jwks = json!({
-            "keys": [
-                {
-                    "kty": "RSA",
-                    "kid": TEST_KID,
-                    "use": "sig",
-                    "alg": "RS256",
-                    "n": n,
-                    "e": e
-                }
-            ]
-        });
+    fn build_test_oidc_issuer() -> (StaticOidcHttpClient, TestOidcIssuer) {
+        let issuer = TestOidcIssuer::new(ISSUER, AUDIENCE, TEST_KID).unwrap();
 
         let mut http = StaticOidcHttpClient::new();
-        http.insert(DISCOVERY_URL, discovery.to_string());
-        http.insert(JWKS_URL, jwks.to_string());
+        http.insert(
+            issuer.discovery_url(),
+            issuer.discovery_document().to_string(),
+        );
+        http.insert(issuer.jwks_url(), issuer.jwks_document().to_string());
 
-        (
-            http,
-            EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap(),
-        )
+        (http, issuer)
     }
 
-    fn issue_token(encoding_key: &EncodingKey, claims: TestClaims) -> String {
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some(TEST_KID.to_owned());
-
-        encode(&header, &claims, encoding_key).unwrap()
-    }
-
-    fn valid_claims() -> TestClaims {
-        TestClaims {
-            iss: ISSUER.to_owned(),
-            aud: AUDIENCE.to_owned(),
-            sub: "repo:owner/repo:ref:refs/heads/main".to_owned(),
-            exp: 4_102_444_800,
-            nbf: 1_700_000_000,
-            iat: 1_700_000_000,
-            r#ref: "refs/heads/main".to_owned(),
-            repository: "owner/repo".to_owned(),
-            project_slug: "example_repo".to_owned(),
-            project_path: None,
-            git_ref: None,
-        }
+    fn valid_claims() -> TestOidcClaims {
+        TestOidcClaims::github_actions(ISSUER, AUDIENCE, "owner/repo", "refs/heads/main")
+            .with_string_claim("project_slug", "example_repo")
     }
 
     #[tokio::test]
     async fn oidc_authorizer_accepts_valid_token() {
-        let (http, encoding_key) = build_test_http_client();
+        let (http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
-        let token = issue_token(&encoding_key, valid_claims());
+        let token = issuer.issue_token(&valid_claims()).unwrap();
 
         let identity = authorizer.authorize_bearer(Some(&token)).await.unwrap();
 
@@ -384,17 +310,17 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_uses_configured_identity_claims() {
-        let (http, encoding_key) = build_test_http_client();
+        let (http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(
             oidc_config_with_identity_claims("project_path", "git_ref"),
             Arc::new(http),
         );
 
         let mut claims = valid_claims();
-        claims.project_path = Some("group/repo".to_owned());
-        claims.git_ref = Some("refs/tags/v1.0".to_owned());
+        claims.set_string_claim("project_path", "group/repo");
+        claims.set_string_claim("git_ref", "refs/tags/v1.0");
 
-        let token = issue_token(&encoding_key, claims);
+        let token = issuer.issue_token(&claims).unwrap();
         let identity = authorizer.authorize_bearer(Some(&token)).await.unwrap();
 
         match identity.kind {
@@ -408,13 +334,13 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_rejects_wrong_audience() {
-        let (http, encoding_key) = build_test_http_client();
+        let (http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
 
         let mut claims = valid_claims();
         claims.aud = "https://wrong.example.com".to_owned();
 
-        let token = issue_token(&encoding_key, claims);
+        let token = issuer.issue_token(&claims).unwrap();
         let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
 
         assert_eq!(error, AuthError::InvalidToken);
@@ -422,13 +348,13 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_rejects_subject_that_does_not_match_bound_subject() {
-        let (http, encoding_key) = build_test_http_client();
+        let (http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
 
         let mut claims = valid_claims();
         claims.sub = "repo:someone-else/repo:ref:refs/heads/main".to_owned();
 
-        let token = issue_token(&encoding_key, claims);
+        let token = issuer.issue_token(&claims).unwrap();
         let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
 
         assert_eq!(error, AuthError::InvalidToken);
@@ -436,13 +362,13 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_rejects_claim_that_does_not_match_bound_claims() {
-        let (http, encoding_key) = build_test_http_client();
+        let (http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
 
         let mut claims = valid_claims();
-        claims.repository = "owner/other-repo".to_owned();
+        claims.set_string_claim("repository", "owner/other-repo");
 
-        let token = issue_token(&encoding_key, claims);
+        let token = issuer.issue_token(&claims).unwrap();
         let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
 
         assert_eq!(error, AuthError::InvalidToken);
@@ -461,15 +387,15 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_returns_unavailable_when_discovery_fetch_fails() {
-        let (_http, encoding_key) = build_test_http_client();
+        let (_http, issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(StaticOidcHttpClient::new()));
 
-        let token = issue_token(&encoding_key, valid_claims());
+        let token = issuer.issue_token(&valid_claims()).unwrap();
         let error = authorizer.authorize_bearer(Some(&token)).await.unwrap_err();
 
         match error {
             AuthError::Unavailable(message) => {
-                assert!(message.contains(DISCOVERY_URL));
+                assert!(message.contains(&issuer.discovery_url()));
             }
             other => panic!("expected AuthError::Unavailable, got {other:?}"),
         }
@@ -477,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_authorizer_returns_missing_token_when_no_bearer_is_provided() {
-        let (http, _encoding_key) = build_test_http_client();
+        let (http, _issuer) = build_test_oidc_issuer();
         let authorizer = OidcAuthorizer::new(oidc_config(), Arc::new(http));
 
         let error = authorizer.authorize_bearer(None).await.unwrap_err();

@@ -1,17 +1,8 @@
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::routing::get;
-use axum::{Json, Router};
-use base64::Engine as _;
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use rsa::pkcs8::{EncodePrivateKey, LineEnding};
-use rsa::traits::PublicKeyParts;
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use serde::Serialize;
+use reqwest::StatusCode;
 use tokio::fs;
 use tokio::process::Command;
 
@@ -20,84 +11,12 @@ use cache_auth::{OidcAuthorizer, OidcConfig, OidcProviderConfig, ReqwestOidcHttp
 use cache_core::nix::parse_path_info_json;
 use cache_store::upstream::ReqwestUpstreamCacheClient;
 use cache_test_utils::{
-    EXAMPLE_PROJECT_NAME, TestDatabase, TestServer, example_project, filesystem_backends_in,
-    test_signing_keys,
+    EXAMPLE_PROJECT_NAME, RecordedOidcTokenRequest, TestDatabase, TestGitHubActionsOidcServer,
+    TestServer, example_project, filesystem_backends_in, test_signing_keys,
 };
 
 const WRITE_TOKEN: &str = "secret-token";
 const GITHUB_OIDC_REQUEST_TOKEN: &str = "github-actions-request-token";
-const TEST_KID: &str = "cache-push-smoke-test-key";
-
-#[derive(Debug, Clone)]
-struct FakeOidcState {
-    issuer: String,
-    jwks_uri: String,
-    jwks: serde_json::Value,
-    token: String,
-    token_requests: Arc<Mutex<Vec<FakeTokenRequest>>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FakeTokenRequest {
-    authorization: Option<String>,
-    audience: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct FakeTokenQuery {
-    audience: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct TestOidcClaims {
-    iss: String,
-    aud: String,
-    sub: String,
-    exp: usize,
-    nbf: usize,
-    iat: usize,
-    r#ref: String,
-    repository: String,
-}
-
-struct LocalTestServer {
-    base_url: String,
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl LocalTestServer {
-    async fn spawn_with_known_url<F>(build_app: F) -> Result<Self>
-    where
-        F: FnOnce(String) -> Router,
-    {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let base_url = format!("http://{address}");
-        let app = build_app(base_url.clone());
-
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("local test server should stay alive");
-        });
-
-        Ok(Self { base_url, handle })
-    }
-
-    fn url(&self, path: impl AsRef<str>) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.as_ref().trim_start_matches('/')
-        )
-    }
-}
-
-impl Drop for LocalTestServer {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
-}
 
 async fn command_available(command: &str) -> bool {
     match Command::new(command).arg("--version").output().await {
@@ -177,117 +96,6 @@ async fn expected_nar_dump_bytes(store_path: &str) -> Result<Vec<u8>> {
     }
 
     Ok(output.stdout)
-}
-
-async fn discovery_handler(State(state): State<FakeOidcState>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "issuer": state.issuer,
-        "jwks_uri": state.jwks_uri,
-    }))
-}
-
-async fn jwks_handler(State(state): State<FakeOidcState>) -> Json<serde_json::Value> {
-    Json(state.jwks)
-}
-
-async fn token_handler(
-    State(state): State<FakeOidcState>,
-    headers: HeaderMap,
-    Query(query): Query<FakeTokenQuery>,
-) -> Json<serde_json::Value> {
-    state.token_requests.lock().unwrap().push(FakeTokenRequest {
-        authorization: headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned),
-        audience: query.audience,
-    });
-
-    Json(serde_json::json!({
-        "value": state.token,
-    }))
-}
-
-fn build_test_oidc_token_and_jwks(
-    issuer: &str,
-    audience: &str,
-) -> Result<(String, serde_json::Value)> {
-    let mut rng = rsa::rand_core::OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).context("generating test RSA key")?;
-    let public_key = RsaPublicKey::from(&private_key);
-
-    let private_pem = private_key
-        .to_pkcs8_pem(LineEnding::LF)
-        .context("encoding test RSA private key")?;
-
-    let n = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
-    let e = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
-
-    let jwks = serde_json::json!({
-        "keys": [
-            {
-                "kty": "RSA",
-                "use": "sig",
-                "kid": TEST_KID,
-                "alg": "RS256",
-                "n": n,
-                "e": e
-            }
-        ]
-    });
-
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(TEST_KID.to_owned());
-
-    let claims = TestOidcClaims {
-        iss: issuer.to_owned(),
-        aud: audience.to_owned(),
-        sub: "repo:owner/repo:ref:refs/heads/main".to_owned(),
-        exp: 4_102_444_800,
-        nbf: 1_700_000_000,
-        iat: 1_700_000_000,
-        r#ref: "refs/heads/main".to_owned(),
-        repository: "owner/repo".to_owned(),
-    };
-
-    let token = encode(
-        &header,
-        &claims,
-        &EncodingKey::from_rsa_pem(private_pem.as_bytes()).context("building test encoding key")?,
-    )
-    .context("encoding test OIDC token")?;
-
-    Ok((token, jwks))
-}
-
-async fn spawn_fake_github_oidc_issuer(
-    audience: &str,
-) -> Result<(LocalTestServer, Arc<Mutex<Vec<FakeTokenRequest>>>)> {
-    let token_requests = Arc::new(Mutex::new(Vec::new()));
-    let token_requests_for_app = token_requests.clone();
-    let audience = audience.to_owned();
-
-    let server = LocalTestServer::spawn_with_known_url(move |issuer| {
-        let (token, jwks) = build_test_oidc_token_and_jwks(&issuer, &audience)
-            .expect("building fake OIDC token and JWKS");
-
-        let state = FakeOidcState {
-            issuer: issuer.clone(),
-            jwks_uri: format!("{issuer}/.well-known/jwks"),
-            jwks,
-            token,
-            token_requests: token_requests_for_app,
-        };
-
-        Router::new()
-            .route("/.well-known/openid-configuration", get(discovery_handler))
-            .route("/.well-known/jwks", get(jwks_handler))
-            .route("/token", get(token_handler))
-            .with_state(state)
-    })
-    .await?;
-
-    Ok((server, token_requests))
 }
 
 #[tokio::test]
@@ -431,7 +239,8 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
     fixture.insert_example_project().await?;
 
     let app_audience = "cache-push-oidc-smoke-test";
-    let (oidc_server, token_requests) = spawn_fake_github_oidc_issuer(app_audience).await?;
+    let oidc_server =
+        TestGitHubActionsOidcServer::spawn(app_audience, "owner/repo", "refs/heads/main").await?;
 
     fixture
         .db
@@ -449,7 +258,7 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
             providers: BTreeMap::from([(
                 "github".to_owned(),
                 OidcProviderConfig {
-                    issuer: oidc_server.base_url.clone(),
+                    issuer: oidc_server.base_url().to_owned(),
                     audience: app_audience.to_owned(),
                     repository_claim: None,
                     ref_claim: None,
@@ -522,8 +331,8 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
     }
 
     assert_eq!(
-        token_requests.lock().unwrap().as_slice(),
-        &[FakeTokenRequest {
+        oidc_server.token_requests().as_slice(),
+        &[RecordedOidcTokenRequest {
             authorization: Some(format!("Bearer {GITHUB_OIDC_REQUEST_TOKEN}")),
             audience: Some(app_audience.to_owned()),
         }]

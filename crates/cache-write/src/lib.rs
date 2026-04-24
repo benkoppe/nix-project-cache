@@ -9,6 +9,7 @@ pub use state::WriteAppState;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -24,19 +25,26 @@ mod tests {
         BeginBuildResponse, DeleteProjectOidcIdentityRequest, PinInfo, ProjectInfo,
         ProjectOidcIdentityInfo, RunGcResponse, UpsertProjectOidcIdentityRequest,
     };
-    use cache_auth::{AuthError, AuthenticatedIdentity, Authorizer, StaticTokenAuthorizer};
+    use cache_auth::{
+        AuthError, AuthenticatedIdentity, Authorizer, OidcAuthorizer, OidcConfig,
+        OidcProviderConfig, StaticOidcHttpClient, StaticTokenAuthorizer,
+    };
     use cache_core::storage::LocalBackendName;
     use cache_db::SqliteDatabase;
     use cache_ingest::{GcService, IngestService};
     use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
-        EXAMPLE_PROJECT_SLUG, TestDatabase, example_project, filesystem_backends_in, hello_path,
+        EXAMPLE_PROJECT_SLUG, TestDatabase, TestOidcIssuer, example_project,
+        filesystem_backends_in, hello_path,
     };
 
     use super::*;
 
     const WRITE_TOKEN: &str = "secret-token";
+    const TEST_OIDC_ISSUER: &str = "https://token.actions.githubusercontent.com";
+    const TEST_OIDC_AUDIENCE: &str = "https://cache.example.com";
+    const TEST_OIDC_KID: &str = "cache-write-test-key";
 
     struct FixedAuthorizer {
         result: Result<AuthenticatedIdentity, AuthError>,
@@ -119,6 +127,41 @@ mod tests {
             .unwrap();
     }
 
+    fn build_configured_claim_oidc_authorizer() -> (OidcAuthorizer, TestOidcIssuer) {
+        let issuer =
+            TestOidcIssuer::new(TEST_OIDC_ISSUER, TEST_OIDC_AUDIENCE, TEST_OIDC_KID).unwrap();
+
+        let mut http = StaticOidcHttpClient::new();
+        http.insert(
+            issuer.discovery_url(),
+            issuer.discovery_document().to_string(),
+        );
+        http.insert(issuer.jwks_url(), issuer.jwks_document().to_string());
+
+        let authorizer = OidcAuthorizer::new(
+            OidcConfig {
+                providers: BTreeMap::from([(
+                    "github".to_owned(),
+                    OidcProviderConfig {
+                        issuer: TEST_OIDC_ISSUER.to_owned(),
+                        audience: TEST_OIDC_AUDIENCE.to_owned(),
+                        repository_claim: Some("project_path".to_owned()),
+                        ref_claim: Some("git_ref".to_owned()),
+                        bound_claims: BTreeMap::from([(
+                            "project_path".to_owned(),
+                            vec!["owner/repo".to_owned()],
+                        )]),
+                        bound_subject: vec!["repo:owner/repo:*".to_owned()],
+                    },
+                )]),
+                allow_insecure: false,
+            },
+            Arc::new(http),
+        );
+
+        (authorizer, issuer)
+    }
+
     fn json_request(
         method: Method,
         uri: impl AsRef<str>,
@@ -133,10 +176,19 @@ mod tests {
     }
 
     fn authed_json(method: Method, uri: impl AsRef<str>, body: serde_json::Value) -> Request<Body> {
+        bearer_json(WRITE_TOKEN, method, uri, body)
+    }
+
+    fn bearer_json(
+        token: &str,
+        method: Method,
+        uri: impl AsRef<str>,
+        body: serde_json::Value,
+    ) -> Request<Body> {
         Request::builder()
             .method(method)
             .uri(uri.as_ref())
-            .header(header::AUTHORIZATION, format!("Bearer {}", WRITE_TOKEN))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(serde_json::to_vec(&body).unwrap()))
             .unwrap()
@@ -564,6 +616,89 @@ mod tests {
                 "/api/gc",
                 json!({
                     "dry_run": true,
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn oidc_identity_with_configured_claim_names_can_begin_build_for_matching_project_and_ref()
+     {
+        let (authorizer, issuer) = build_configured_claim_oidc_authorizer();
+        let test_app = build_test_app_with_authorizer(Arc::new(authorizer)).await;
+
+        test_app
+            .db
+            .replace_project_oidc_identity(
+                &example_project(),
+                "github",
+                "owner/repo",
+                &["refs/heads/main".to_owned()],
+            )
+            .await
+            .unwrap();
+
+        let mut claims = issuer.github_actions_claims("owner/repo", "refs/heads/main");
+        claims.set_string_claim("project_path", "owner/repo");
+        claims.set_string_claim("git_ref", "refs/heads/main");
+
+        let token = issuer.issue_token(&claims).unwrap();
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/main",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn oidc_identity_with_configured_claim_names_rejects_wrong_ref() {
+        let (authorizer, issuer) = build_configured_claim_oidc_authorizer();
+        let test_app = build_test_app_with_authorizer(Arc::new(authorizer)).await;
+
+        test_app
+            .db
+            .replace_project_oidc_identity(
+                &example_project(),
+                "github",
+                "owner/repo",
+                &["refs/heads/main".to_owned()],
+            )
+            .await
+            .unwrap();
+
+        let mut claims = issuer.github_actions_claims("owner/repo", "refs/heads/main");
+        claims.set_string_claim("project_path", "owner/repo");
+        claims.set_string_claim("git_ref", "refs/heads/main");
+
+        let token = issuer.issue_token(&claims).unwrap();
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/feature",
+                    "revision": "deadbeef",
                 }),
             ))
             .await

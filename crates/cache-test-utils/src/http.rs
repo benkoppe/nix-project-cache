@@ -25,6 +25,22 @@ impl TestServer {
         })
     }
 
+    pub async fn spawn_with_known_url<F>(build_app: F) -> Result<Self>
+    where
+        F: FnOnce(String) -> Router,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let base_url = format!("http://{address}");
+        let app = build_app(base_url.clone());
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test server should stay alive");
+        });
+        Ok(Self { base_url, handle })
+    }
+
     pub fn url(&self, path: impl AsRef<str>) -> String {
         format!(
             "{}/{}",
