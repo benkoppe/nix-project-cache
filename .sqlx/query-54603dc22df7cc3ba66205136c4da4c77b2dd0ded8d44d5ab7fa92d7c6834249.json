@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO upstream_caches (id, name, base_url, priority, enabled)\n            VALUES (?, ?, ?, ?, ?)\n            ON CONFLICT(name) DO UPDATE SET\n                base_url = excluded.base_url,\n                priority = excluded.priority,\n                enabled = excluded.enabled\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "54603dc22df7cc3ba66205136c4da4c77b2dd0ded8d44d5ab7fa92d7c6834249"
+}

@@ -29,6 +29,9 @@ pub enum Command {
     Pins(PinsCommand),
 
     #[command(subcommand)]
+    Upstreams(UpstreamsCommand),
+
+    #[command(subcommand)]
     Gc(GcCommand),
 }
 
@@ -163,6 +166,47 @@ pub struct DeletePinCommand {
 
     #[arg(long)]
     pub project: Option<String>,
+
+    #[arg(long)]
+    pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UpstreamsCommand {
+    List,
+    Upsert(UpsertUpstreamCommand),
+    Enable(UpstreamNameCommand),
+    Disable(UpstreamNameCommand),
+    Link(LinkProjectUpstreamCommand),
+    Unlink(LinkProjectUpstreamCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct UpsertUpstreamCommand {
+    pub name: String,
+
+    #[arg(long)]
+    pub url: String,
+
+    #[arg(long, default_value_t = 50)]
+    pub priority: u32,
+
+    #[arg(long)]
+    pub disabled: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct UpstreamNameCommand {
+    pub name: String,
+
+    #[arg(long)]
+    pub ignore_missing: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct LinkProjectUpstreamCommand {
+    pub project: String,
+    pub upstream: String,
 
     #[arg(long)]
     pub ignore_missing: bool,

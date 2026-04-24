@@ -37,6 +37,28 @@ pub fn write_router(state: WriteAppState) -> Router {
             "/api/projects/{project}/oidc-identities",
             delete(handlers::delete_project_oidc_identity),
         )
+        .route(
+            "/api/projects/{project}/upstreams",
+            get(handlers::list_project_upstreams),
+        )
+        .route(
+            "/api/projects/{project}/upstreams/{upstream}",
+            post(handlers::link_project_upstream),
+        )
+        .route(
+            "/api/projects/{project}/upstreams/{upstream}",
+            delete(handlers::unlink_project_upstream),
+        )
+        .route("/api/upstreams", get(handlers::list_upstreams))
+        .route("/api/upstreams", post(handlers::upsert_upstream))
+        .route(
+            "/api/upstreams/{upstream}/enable",
+            post(handlers::enable_upstream),
+        )
+        .route(
+            "/api/upstreams/{upstream}/disable",
+            post(handlers::disable_upstream),
+        )
         .route("/api/access-tokens", get(handlers::list_access_tokens))
         .route("/api/access-tokens", post(handlers::create_access_token))
         .route(

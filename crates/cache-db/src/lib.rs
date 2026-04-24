@@ -14,7 +14,7 @@ mod upstreams;
 pub use models::{
     AccessTokenRecord, BuildContextRecord, BuildRecord, BuildStatus, PinRecord,
     ProjectOidcIdentityRecord, ProjectRecord, ProjectRetentionPolicyRecord,
-    ProjectRetentionRuleRecord,
+    ProjectRetentionRuleRecord, UpstreamCacheRecord,
 };
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;

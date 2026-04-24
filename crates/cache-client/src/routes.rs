@@ -79,6 +79,37 @@ pub fn project_oidc_identities(
     )
 }
 
+pub fn upstreams(base_url: &Url) -> Result<Url, CacheClientError> {
+    join(base_url, "api/upstreams")
+}
+
+pub fn upstream_enabled(
+    base_url: &Url,
+    upstream: &str,
+    enabled: bool,
+) -> Result<Url, CacheClientError> {
+    let action = if enabled { "enable" } else { "disable" };
+    join(base_url, &format!("api/upstreams/{upstream}/{action}"))
+}
+
+pub fn project_upstreams(base_url: &Url, project: &ProjectSlug) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/upstreams", project.as_str()),
+    )
+}
+
+pub fn project_upstream(
+    base_url: &Url,
+    project: &ProjectSlug,
+    upstream: &str,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/upstreams/{upstream}", project.as_str()),
+    )
+}
+
 pub fn access_tokens(
     base_url: &Url,
     project: Option<&ProjectSlug>,

@@ -489,6 +489,7 @@ dependencies = [
  "cache-test-utils",
  "futures-util",
  "http-body-util",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

@@ -15,7 +15,7 @@ use cache_api::{
     AccessTokenInfo, BeginBuildRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
     CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest, PinInfo, ProjectInfo,
     ProjectOidcIdentityInfo, RegisterPathsRequest, RunGcRequest, UpsertProjectOidcIdentityRequest,
-    UpsertProjectRequest,
+    UpsertProjectRequest, UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
@@ -572,6 +572,240 @@ pub async fn delete_project_oidc_identity(
             StatusCode::BAD_REQUEST.into_response()
         }
     }
+}
+
+pub async fn list_upstreams(
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    match state.db.list_upstream_caches().await {
+        Ok(upstreams) => (StatusCode::OK, Json(upstream_infos(upstreams))).into_response(),
+        Err(error) => {
+            tracing::error!(?error, "list_upstreams failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn upsert_upstream(
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<UpsertUpstreamRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    if request.name.trim().is_empty() || request.base_url.trim().is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    if reqwest::Url::parse(&request.base_url).is_err() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    match state
+        .db
+        .upsert_upstream_cache_by_name(
+            request.name.trim(),
+            request.base_url.trim(),
+            request.priority,
+            request.enabled,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "upsert_upstream failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn enable_upstream(
+    Path(upstream): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    set_upstream_enabled(state, headers, upstream, true).await
+}
+
+pub async fn disable_upstream(
+    Path(upstream): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    set_upstream_enabled(state, headers, upstream, false).await
+}
+
+async fn set_upstream_enabled(
+    state: WriteAppState,
+    headers: axum::http::HeaderMap,
+    upstream: String,
+    enabled: bool,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    match state.db.set_upstream_enabled(&upstream, enabled).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "set_upstream_enabled failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn list_project_upstreams(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.db.list_upstreams_for_project(&project).await {
+        Ok(upstreams) => (StatusCode::OK, Json(upstream_infos(upstreams))).into_response(),
+        Err(error) => {
+            tracing::error!(?error, "list_project_upstreams failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn link_project_upstream(
+    Path((project, upstream)): Path<(String, String)>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .link_project_upstream_by_name(&project, &upstream)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "link_project_upstream failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn unlink_project_upstream(
+    Path((project, upstream)): Path<(String, String)>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state
+        .db
+        .unlink_project_upstream_by_name(&project, &upstream)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "unlink_project_upstream failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+fn upstream_infos(upstreams: Vec<cache_db::UpstreamCacheRecord>) -> Vec<UpstreamInfo> {
+    upstreams
+        .into_iter()
+        .map(|upstream| UpstreamInfo {
+            name: upstream.name,
+            base_url: upstream.base_url,
+            priority: upstream.priority,
+            enabled: upstream.enabled,
+            created_at: upstream.created_at.to_string(),
+        })
+        .collect()
 }
 
 pub async fn create_access_token(

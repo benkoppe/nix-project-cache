@@ -10,6 +10,7 @@ use cache_api::{
     CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
     FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse,
     RunGcRequest, RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
@@ -259,6 +260,82 @@ impl CacheClient {
             .json(&request)
             .send()
             .await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
+    pub async fn list_upstreams(&self) -> Result<Vec<UpstreamInfo>, CacheClientError> {
+        let url = routes::upstreams(&self.base_url)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn upsert_upstream(
+        &self,
+        request: UpsertUpstreamRequest,
+    ) -> Result<(), CacheClientError> {
+        let url = routes::upstreams(&self.base_url)?;
+        let response = self
+            .request(Method::POST, url)
+            .json(&request)
+            .send()
+            .await?;
+
+        self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn set_upstream_enabled(
+        &self,
+        upstream: &str,
+        enabled: bool,
+    ) -> Result<bool, CacheClientError> {
+        let url = routes::upstream_enabled(&self.base_url, upstream, enabled)?;
+        let response = self.request(Method::POST, url).send().await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
+    pub async fn list_project_upstreams(
+        &self,
+        project: &ProjectSlug,
+    ) -> Result<Vec<UpstreamInfo>, CacheClientError> {
+        let url = routes::project_upstreams(&self.base_url, project)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn link_project_upstream(
+        &self,
+        project: &ProjectSlug,
+        upstream: &str,
+    ) -> Result<bool, CacheClientError> {
+        let url = routes::project_upstream(&self.base_url, project, upstream)?;
+        let response = self.request(Method::POST, url).send().await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
+    pub async fn unlink_project_upstream(
+        &self,
+        project: &ProjectSlug,
+        upstream: &str,
+    ) -> Result<bool, CacheClientError> {
+        let url = routes::project_upstream(&self.base_url, project, upstream)?;
+        let response = self.request(Method::DELETE, url).send().await?;
 
         match response.status() {
             StatusCode::NO_CONTENT => Ok(true),

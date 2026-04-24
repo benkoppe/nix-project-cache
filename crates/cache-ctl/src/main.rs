@@ -4,6 +4,7 @@ mod output;
 mod pins;
 mod projects;
 mod tokens;
+mod upstreams;
 
 use anyhow::{Context as _, Result};
 use clap::Parser as _;
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
         Command::Projects(command) => projects::handle(&client, &mut stdout, json, command).await,
         Command::Tokens(command) => tokens::handle(&client, &mut stdout, json, command).await,
         Command::Pins(command) => pins::handle(&client, &mut stdout, json, command).await,
+        Command::Upstreams(command) => upstreams::handle(&client, &mut stdout, json, command).await,
         Command::Gc(command) => gc::handle(&client, &mut stdout, json, command).await,
     }
 }
