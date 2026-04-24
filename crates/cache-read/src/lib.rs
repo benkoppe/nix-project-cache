@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nix_cache_info_includes_public_keys() {
+    async fn nix_cache_info_omits_signatures_and_public_keys() {
         let response = get(read_router(sample_state()), "/nix-cache-info").await;
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -205,7 +205,9 @@ mod tests {
         assert!(body.contains("StoreDir: /nix/store\n"));
         assert!(body.contains("WantMassQuery: 1\n"));
         assert!(body.contains("Priority: 30\n"));
-        assert!(body.contains("PublicKey: cache.example.com-1:"));
+        assert!(!body.contains("Sig:"));
+        assert!(!body.contains("PublicKey:"));
+        assert!(!body.contains("cache.example.com-1:"));
     }
 
     #[tokio::test]
