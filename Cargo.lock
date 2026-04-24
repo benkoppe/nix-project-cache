@@ -330,6 +330,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache-ctl"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "cache-api",
+ "cache-client",
+ "cache-core",
+ "cache-test-utils",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cache-db"
 version = "0.0.1"
 dependencies = [

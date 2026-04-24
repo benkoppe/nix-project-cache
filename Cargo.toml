@@ -6,6 +6,7 @@ members = [
   "crates/cache-auth",
   "crates/cache-client",
   "crates/cache-core",
+  "crates/cache-ctl",
   "crates/cache-db",
   "crates/cache-ingest",
   "crates/cache-push",
