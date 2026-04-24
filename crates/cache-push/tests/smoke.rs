@@ -451,6 +451,8 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
                 OidcProviderConfig {
                     issuer: oidc_server.base_url.clone(),
                     audience: app_audience.to_owned(),
+                    repository_claim: None,
+                    ref_claim: None,
                     bound_claims: BTreeMap::from([(
                         "repository".to_owned(),
                         vec!["owner/repo".to_owned()],

@@ -15,8 +15,16 @@ pub struct OidcConfig {
 pub struct OidcProviderConfig {
     pub issuer: String,
     pub audience: String,
+
+    #[serde(default)]
+    pub repository_claim: Option<String>,
+
+    #[serde(default)]
+    pub ref_claim: Option<String>,
+
     #[serde(default)]
     pub bound_claims: BTreeMap<String, Vec<String>>,
+
     #[serde(default)]
     pub bound_subject: Vec<String>,
 }
@@ -98,6 +106,19 @@ impl OidcConfig {
                 )));
             }
 
+            for (field_name, claim_name) in [
+                ("repository_claim", provider.repository_claim.as_deref()),
+                ("ref_claim", provider.ref_claim.as_deref()),
+            ] {
+                if let Some(claim_name) = claim_name
+                    && claim_name.trim().is_empty()
+                {
+                    return Err(OidcConfigError::Invalid(format!(
+                        "provider {name:?}: {field_name} must not be empty"
+                    )));
+                }
+            }
+
             if let Some(existing) = issuers.insert(provider.issuer.as_str(), name.as_str()) {
                 return Err(OidcConfigError::Invalid(format!(
                     "provider {name:?}: duplicate issuer already used by {existing:?}"
@@ -126,6 +147,8 @@ mod tests {
         OidcProviderConfig {
             issuer: issuer.to_owned(),
             audience: "https://cache.example.com".to_owned(),
+            repository_claim: None,
+            ref_claim: None,
             bound_claims: BTreeMap::new(),
             bound_subject: Vec::new(),
         }
@@ -158,6 +181,8 @@ mod tests {
                 OidcProviderConfig {
                     issuer: "https://token.actions.githubusercontent.com".to_owned(),
                     audience: String::new(),
+                    repository_claim: None,
+                    ref_claim: None,
                     bound_claims: BTreeMap::new(),
                     bound_subject: Vec::new(),
                 },
@@ -194,6 +219,8 @@ mod tests {
                     OidcProviderConfig {
                         issuer: "https://token.actions.githubusercontent.com".to_owned(),
                         audience: "https://cache.example.com".to_owned(),
+                        repository_claim: None,
+                        ref_claim: None,
                         bound_claims: BTreeMap::from([(
                             "repository".to_owned(),
                             vec!["owner/repo".to_owned()],

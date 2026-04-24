@@ -155,8 +155,16 @@ impl Authorizer for OidcAuthorizer {
             .map_err(|_| AuthError::InvalidToken)?;
 
         let subject = get_string_claim(&claims, "sub").ok_or(AuthError::InvalidToken)?;
-        let repository = get_string_claim(&claims, "repository");
-        let ref_name = get_string_claim(&claims, "ref");
+
+        let repository_claim = provider
+            .config
+            .repository_claim
+            .as_deref()
+            .unwrap_or("repository");
+        let ref_claim = provider.config.ref_claim.as_deref().unwrap_or("ref");
+
+        let repository = get_string_claim(&claims, repository_claim);
+        let ref_name = get_string_claim(&claims, ref_claim);
 
         Ok(AuthenticatedIdentity::oidc(
             provider.name,
@@ -220,7 +228,7 @@ mod tests {
     const JWKS_URL: &str = "https://token.actions.githubusercontent.com/.well-known/jwks";
     const TEST_KID: &str = "test-kid-1";
 
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, Clone, Serialize)]
     struct TestClaims {
         iss: String,
         aud: String,
@@ -231,6 +239,10 @@ mod tests {
         r#ref: String,
         repository: String,
         project_slug: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project_path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        git_ref: Option<String>,
     }
 
     fn oidc_config() -> OidcConfig {
@@ -240,11 +252,30 @@ mod tests {
                 OidcProviderConfig {
                     issuer: ISSUER.to_owned(),
                     audience: AUDIENCE.to_owned(),
+                    repository_claim: None,
+                    ref_claim: None,
                     bound_claims: BTreeMap::from([(
                         "repository".to_owned(),
                         vec!["owner/repo".to_owned()],
                     )]),
                     bound_subject: vec!["repo:owner/repo:*".to_owned()],
+                },
+            )]),
+            allow_insecure: false,
+        }
+    }
+
+    fn oidc_config_with_identity_claims(repository_claim: &str, ref_claim: &str) -> OidcConfig {
+        OidcConfig {
+            providers: BTreeMap::from([(
+                "github".to_owned(),
+                OidcProviderConfig {
+                    issuer: ISSUER.to_owned(),
+                    audience: AUDIENCE.to_owned(),
+                    repository_claim: Some(repository_claim.to_owned()),
+                    ref_claim: Some(ref_claim.to_owned()),
+                    bound_claims: BTreeMap::new(),
+                    bound_subject: Vec::new(),
                 },
             )]),
             allow_insecure: false,
@@ -312,6 +343,8 @@ mod tests {
             r#ref: "refs/heads/main".to_owned(),
             repository: "owner/repo".to_owned(),
             project_slug: "example_repo".to_owned(),
+            project_path: None,
+            git_ref: None,
         }
     }
 
@@ -347,6 +380,30 @@ mod tests {
                 .clone(),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn oidc_authorizer_uses_configured_identity_claims() {
+        let (http, encoding_key) = build_test_http_client();
+        let authorizer = OidcAuthorizer::new(
+            oidc_config_with_identity_claims("project_path", "git_ref"),
+            Arc::new(http),
+        );
+
+        let mut claims = valid_claims();
+        claims.project_path = Some("group/repo".to_owned());
+        claims.git_ref = Some("refs/tags/v1.0".to_owned());
+
+        let token = issue_token(&encoding_key, claims);
+        let identity = authorizer.authorize_bearer(Some(&token)).await.unwrap();
+
+        match identity.kind {
+            IdentityKind::Oidc(oidc) => {
+                assert_eq!(oidc.repository.as_deref(), Some("group/repo"));
+                assert_eq!(oidc.ref_name.as_deref(), Some("refs/tags/v1.0"));
+            }
+            other => panic!("expected OIDC identity, got {other:?}"),
+        }
     }
 
     #[tokio::test]
