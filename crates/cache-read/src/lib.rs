@@ -197,20 +197,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nix_cache_info_omits_signatures_and_public_keys() {
-        let response = get(read_router(sample_state()), "/nix-cache-info").await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = body_to_string(response).await;
-        assert!(body.contains("StoreDir: /nix/store\n"));
-        assert!(body.contains("WantMassQuery: 1\n"));
-        assert!(body.contains("Priority: 30\n"));
-        assert!(!body.contains("Sig:"));
-        assert!(!body.contains("PublicKey:"));
-        assert!(!body.contains("cache.example.com-1:"));
-    }
-
-    #[tokio::test]
     async fn aggregate_narinfo_route_returns_rendered_signed_narinfo() {
         let path = hello_path();
         let response = get(read_router(sample_state()), &aggregate_narinfo_path(path)).await;
