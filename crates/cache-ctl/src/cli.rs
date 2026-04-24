@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "cache-ctl")]
@@ -42,6 +42,9 @@ pub enum ProjectsCommand {
 
     #[command(subcommand)]
     Oidc(ProjectOidcCommand),
+
+    #[command(subcommand)]
+    Retention(ProjectRetentionCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -99,6 +102,50 @@ pub struct RemoveProjectOidcCommand {
 
     #[arg(long)]
     pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectRetentionCommand {
+    Get(GetProjectRetentionCommand),
+    Set(SetProjectRetentionCommand),
+    Reset(ResetProjectRetentionCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct GetProjectRetentionCommand {
+    pub project: String,
+}
+
+#[derive(Debug, Parser)]
+pub struct SetProjectRetentionCommand {
+    pub project: String,
+
+    #[arg(long, value_enum)]
+    pub profile: Option<RetentionProfile>,
+
+    #[arg(long)]
+    pub keep_builds: Option<u32>,
+
+    #[arg(long)]
+    pub object_delete_grace: Option<String>,
+
+    #[arg(long = "rule")]
+    pub rules: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct ResetProjectRetentionCommand {
+    pub project: String,
+
+    #[arg(long)]
+    pub ignore_missing: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RetentionProfile {
+    Aggressive,
+    Balanced,
+    Conservative,
 }
 
 #[derive(Debug, Subcommand)]

@@ -14,8 +14,9 @@ use uuid::Uuid;
 use cache_api::{
     AccessTokenInfo, BeginBuildRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
     CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest, PinInfo, ProjectInfo,
-    ProjectOidcIdentityInfo, RegisterPathsRequest, RunGcRequest, UpsertProjectOidcIdentityRequest,
-    UpsertProjectRequest, UpsertUpstreamRequest, UpstreamInfo,
+    ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo, ProjectRetentionRuleInfo,
+    RegisterPathsRequest, RunGcRequest, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    UpsertProjectRetentionPolicyRequest, UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
@@ -571,6 +572,145 @@ pub async fn delete_project_oidc_identity(
             tracing::error!(?error, "delete_project_oidc_identity failed");
             StatusCode::BAD_REQUEST.into_response()
         }
+    }
+}
+
+pub async fn get_project_retention_policy(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.db.get_project_retention_policy(&project).await {
+        Ok(policy) => (StatusCode::OK, Json(retention_policy_info(policy))).into_response(),
+        Err(error) => {
+            tracing::error!(?error, "get_project_retention_policy failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn upsert_project_retention_policy(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<UpsertProjectRetentionPolicyRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    let rules = request
+        .rules
+        .into_iter()
+        .map(|rule| cache_db::ProjectRetentionRuleRecord {
+            priority: rule.priority,
+            ref_pattern: rule.ref_pattern,
+            ttl_seconds: rule.ttl_seconds,
+            keep_builds: rule.keep_builds,
+        })
+        .collect::<Vec<_>>();
+
+    match state
+        .db
+        .replace_project_retention_policy(
+            &project,
+            request.keep_latest_builds_per_ref,
+            request.object_delete_grace_seconds,
+            &rules,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "upsert_project_retention_policy failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn delete_project_retention_policy(
+    Path(project): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    match state.db.delete_project_retention_policy(&project).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "delete_project_retention_policy failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+fn retention_policy_info(
+    policy: cache_db::ProjectRetentionPolicyRecord,
+) -> ProjectRetentionPolicyInfo {
+    ProjectRetentionPolicyInfo {
+        project: policy.project_slug.as_str().to_owned(),
+        inherited_default: policy.inherited_default,
+        keep_latest_builds_per_ref: policy.keep_latest_builds_per_ref,
+        object_delete_grace_seconds: policy.object_delete_grace_seconds,
+        rules: policy
+            .rules
+            .into_iter()
+            .map(|rule| ProjectRetentionRuleInfo {
+                priority: rule.priority,
+                ref_pattern: rule.ref_pattern,
+                ttl_seconds: rule.ttl_seconds,
+                keep_builds: rule.keep_builds,
+            })
+            .collect(),
     }
 }
 

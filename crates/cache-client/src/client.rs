@@ -8,8 +8,9 @@ use tokio_util::io::ReaderStream;
 use cache_api::{
     AccessTokenInfo, BeginBuildRequest, BeginBuildResponse, CreateAccessTokenRequest,
     CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
-    FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse,
-    RunGcRequest, RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo,
+    ProjectRetentionPolicyInfo, RegisterPathsResponse, RunGcRequest, RunGcResponse,
+    UpsertProjectOidcIdentityRequest, UpsertProjectRequest, UpsertProjectRetentionPolicyRequest,
     UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::narinfo::NarInfo;
@@ -260,6 +261,41 @@ impl CacheClient {
             .json(&request)
             .send()
             .await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
+    pub async fn get_project_retention_policy(
+        &self,
+        project: &ProjectSlug,
+    ) -> Result<ProjectRetentionPolicyInfo, CacheClientError> {
+        let url = routes::project_retention(&self.base_url, project)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn upsert_project_retention_policy(
+        &self,
+        project: &ProjectSlug,
+        request: UpsertProjectRetentionPolicyRequest,
+    ) -> Result<(), CacheClientError> {
+        let url = routes::project_retention(&self.base_url, project)?;
+        let response = self.request(Method::PUT, url).json(&request).send().await?;
+
+        self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn delete_project_retention_policy(
+        &self,
+        project: &ProjectSlug,
+    ) -> Result<bool, CacheClientError> {
+        let url = routes::project_retention(&self.base_url, project)?;
+        let response = self.request(Method::DELETE, url).send().await?;
 
         match response.status() {
             StatusCode::NO_CONTENT => Ok(true),

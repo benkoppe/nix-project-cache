@@ -3,14 +3,18 @@ use std::io::Write;
 use anyhow::{Context as _, Result, bail};
 
 use cache_api::{
-    DeleteProjectOidcIdentityRequest, ProjectOidcIdentityInfo, UpsertProjectOidcIdentityRequest,
+    DeleteProjectOidcIdentityRequest, ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo,
+    ProjectRetentionRuleInfo, UpsertProjectOidcIdentityRequest,
+    UpsertProjectRetentionPolicyRequest,
 };
 use cache_client::CacheClient;
 use cache_core::project::ProjectSlug;
 
 use crate::cli::{
-    AddProjectOidcCommand, CreateProjectCommand, ListProjectOidcCommand, ProjectOidcCommand,
-    ProjectsCommand, RemoveProjectOidcCommand,
+    AddProjectOidcCommand, CreateProjectCommand, GetProjectRetentionCommand,
+    ListProjectOidcCommand, ProjectOidcCommand, ProjectRetentionCommand, ProjectsCommand,
+    RemoveProjectOidcCommand, ResetProjectRetentionCommand, RetentionProfile,
+    SetProjectRetentionCommand,
 };
 use crate::output;
 
@@ -26,6 +30,9 @@ pub async fn handle(
             create_project(client, writer, json_output, command).await
         }
         ProjectsCommand::Oidc(command) => handle_oidc(client, writer, json_output, command).await,
+        ProjectsCommand::Retention(command) => {
+            handle_retention(client, writer, json_output, command).await
+        }
     }
 }
 
@@ -263,6 +270,384 @@ async fn remove_oidc_identity(
     }
 
     Ok(())
+}
+
+async fn handle_retention(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ProjectRetentionCommand,
+) -> Result<()> {
+    match command {
+        ProjectRetentionCommand::Get(command) => {
+            get_retention_policy(client, writer, json_output, command).await
+        }
+        ProjectRetentionCommand::Set(command) => {
+            set_retention_policy(client, writer, json_output, command).await
+        }
+        ProjectRetentionCommand::Reset(command) => {
+            reset_retention_policy(client, writer, json_output, command).await
+        }
+    }
+}
+
+async fn get_retention_policy(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: GetProjectRetentionCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+
+    let policy = client
+        .get_project_retention_policy(&project)
+        .await
+        .with_context(|| format!("loading retention policy for project {}", project.as_str()))?;
+
+    print_retention_policy(writer, json_output, policy)
+}
+
+async fn set_retention_policy(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: SetProjectRetentionCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+    let (profile_name, request) = retention_request_from_command(&command)?;
+
+    client
+        .upsert_project_retention_policy(&project, request)
+        .await
+        .with_context(|| format!("setting retention policy for project {}", project.as_str()))?;
+
+    if json_output {
+        output::print_status_json(
+            writer,
+            "updated",
+            [
+                ("project", serde_json::json!(project.as_str())),
+                ("profile", serde_json::json!(profile_name)),
+            ],
+        )?;
+    } else {
+        writeln!(writer, "updated retention policy for {}", project.as_str())?;
+        writeln!(writer, "profile={profile_name}")?;
+    }
+
+    Ok(())
+}
+
+async fn reset_retention_policy(
+    client: &CacheClient,
+    writer: &mut impl Write,
+    json_output: bool,
+    command: ResetProjectRetentionCommand,
+) -> Result<()> {
+    let project = parse_project_slug(&command.project)?;
+
+    let deleted = client
+        .delete_project_retention_policy(&project)
+        .await
+        .with_context(|| {
+            format!(
+                "resetting retention policy for project {}",
+                project.as_str()
+            )
+        })?;
+
+    if !deleted && !command.ignore_missing {
+        bail!(
+            "custom retention policy does not exist for project {}",
+            project.as_str()
+        );
+    }
+
+    if json_output {
+        output::print_status_json(
+            writer,
+            if deleted { "reset" } else { "missing" },
+            [("project", serde_json::json!(project.as_str()))],
+        )?;
+    } else if deleted {
+        writeln!(writer, "reset retention policy for {}", project.as_str())?;
+    } else {
+        writeln!(
+            writer,
+            "retention policy for {} was already default",
+            project.as_str()
+        )?;
+    }
+
+    Ok(())
+}
+
+fn retention_request_from_command(
+    command: &SetProjectRetentionCommand,
+) -> Result<(&'static str, UpsertProjectRetentionPolicyRequest)> {
+    if command.profile.is_some() && !command.rules.is_empty() {
+        bail!("--profile and --rule cannot be used together");
+    }
+
+    match command.profile {
+        Some(profile) => retention_request_from_profile(command, profile),
+        None => retention_request_from_custom_rules(command),
+    }
+}
+
+fn retention_request_from_profile(
+    command: &SetProjectRetentionCommand,
+    profile: RetentionProfile,
+) -> Result<(&'static str, UpsertProjectRetentionPolicyRequest)> {
+    let mut request = match profile {
+        RetentionProfile::Aggressive => UpsertProjectRetentionPolicyRequest {
+            keep_latest_builds_per_ref: 1,
+            object_delete_grace_seconds: 24 * 60 * 60,
+            rules: vec![
+                rule(10, "refs/heads/main", None, Some(1)),
+                rule(20, "refs/heads/master", None, Some(1)),
+                rule(30, "refs/heads/trunk", None, Some(1)),
+                rule(40, "refs/tags/*", None, Some(1)),
+                rule(50, "refs/heads/release/*", days(90), Some(1)),
+                rule(60, "refs/pull/*", days(7), Some(1)),
+                rule(70, "refs/merge-requests/*", days(7), Some(1)),
+                rule(80, "refs/heads/*", days(14), Some(1)),
+                rule(90, "*", days(14), Some(1)),
+            ],
+        },
+        RetentionProfile::Balanced => UpsertProjectRetentionPolicyRequest {
+            keep_latest_builds_per_ref: 2,
+            object_delete_grace_seconds: 24 * 60 * 60,
+            rules: vec![
+                rule(10, "refs/heads/main", None, Some(2)),
+                rule(20, "refs/heads/master", None, Some(2)),
+                rule(30, "refs/heads/trunk", None, Some(2)),
+                rule(40, "refs/tags/*", None, Some(1)),
+                rule(50, "refs/heads/release/*", days(180), Some(2)),
+                rule(60, "refs/pull/*", days(14), Some(1)),
+                rule(70, "refs/merge-requests/*", days(14), Some(1)),
+                rule(80, "refs/heads/*", days(60), Some(2)),
+                rule(90, "*", days(30), Some(1)),
+            ],
+        },
+        RetentionProfile::Conservative => UpsertProjectRetentionPolicyRequest {
+            keep_latest_builds_per_ref: 5,
+            object_delete_grace_seconds: 24 * 60 * 60,
+            rules: vec![
+                rule(10, "refs/heads/main", None, Some(5)),
+                rule(20, "refs/heads/master", None, Some(5)),
+                rule(30, "refs/heads/trunk", None, Some(5)),
+                rule(40, "refs/tags/*", None, Some(2)),
+                rule(50, "refs/heads/release/*", None, Some(3)),
+                rule(60, "refs/pull/*", days(30), Some(2)),
+                rule(70, "refs/merge-requests/*", days(30), Some(2)),
+                rule(80, "refs/heads/*", days(180), Some(3)),
+                rule(90, "*", days(90), Some(2)),
+            ],
+        },
+    };
+
+    if let Some(keep_builds) = command.keep_builds {
+        if keep_builds == 0 {
+            bail!("--keep-builds must be greater than zero");
+        }
+        request.keep_latest_builds_per_ref = keep_builds;
+    }
+
+    if let Some(grace) = command.object_delete_grace.as_deref() {
+        request.object_delete_grace_seconds = parse_duration_seconds(grace)?
+            .ok_or_else(|| anyhow::anyhow!("--object-delete-grace cannot be forever"))?;
+    }
+
+    let profile_name = match profile {
+        RetentionProfile::Aggressive => "aggressive",
+        RetentionProfile::Balanced => "balanced",
+        RetentionProfile::Conservative => "conservative",
+    };
+
+    Ok((profile_name, request))
+}
+
+fn retention_request_from_custom_rules(
+    command: &SetProjectRetentionCommand,
+) -> Result<(&'static str, UpsertProjectRetentionPolicyRequest)> {
+    if command.rules.is_empty() {
+        bail!("retention set requires either --profile or at least one --rule");
+    }
+
+    let keep_latest_builds_per_ref = command
+        .keep_builds
+        .ok_or_else(|| anyhow::anyhow!("custom retention requires --keep-builds"))?;
+    if keep_latest_builds_per_ref == 0 {
+        bail!("--keep-builds must be greater than zero");
+    }
+
+    let object_delete_grace_seconds = command
+        .object_delete_grace
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("custom retention requires --object-delete-grace"))
+        .and_then(|value| {
+            parse_duration_seconds(value)?
+                .ok_or_else(|| anyhow::anyhow!("--object-delete-grace cannot be forever"))
+        })?;
+
+    let rules = command
+        .rules
+        .iter()
+        .map(|value| parse_retention_rule(value))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok((
+        "custom",
+        UpsertProjectRetentionPolicyRequest {
+            keep_latest_builds_per_ref,
+            object_delete_grace_seconds,
+            rules,
+        },
+    ))
+}
+
+fn parse_retention_rule(value: &str) -> Result<ProjectRetentionRuleInfo> {
+    let mut parts = value.splitn(4, ':').collect::<Vec<_>>();
+    if parts.len() != 4 {
+        bail!("invalid retention rule {value:?}; expected priority:ref_pattern:ttl:keep_builds");
+    }
+
+    let priority = parts
+        .remove(0)
+        .parse::<u32>()
+        .with_context(|| format!("invalid priority in retention rule {value:?}"))?;
+    if priority == 0 {
+        bail!("retention rule priority must be greater than zero");
+    }
+
+    let ref_pattern = parts.remove(0).trim().to_owned();
+    if ref_pattern.is_empty() {
+        bail!("retention rule ref_pattern must not be empty");
+    }
+
+    let ttl_seconds = parse_duration_seconds(parts.remove(0))?;
+    let keep_builds = parse_keep_builds(parts.remove(0))?;
+
+    Ok(ProjectRetentionRuleInfo {
+        priority,
+        ref_pattern,
+        ttl_seconds,
+        keep_builds,
+    })
+}
+
+fn parse_keep_builds(value: &str) -> Result<Option<u32>> {
+    let value = value.trim();
+
+    if value == "default" {
+        return Ok(None);
+    }
+
+    let keep_builds = value
+        .parse::<u32>()
+        .with_context(|| format!("invalid keep_builds value {value:?}"))?;
+
+    if keep_builds == 0 {
+        bail!("keep_builds must be greater than zero");
+    }
+
+    Ok(Some(keep_builds))
+}
+
+fn parse_duration_seconds(value: &str) -> Result<Option<u64>> {
+    let value = value.trim();
+
+    if value == "forever" {
+        return Ok(None);
+    }
+
+    let Some((number, multiplier)) = value
+        .strip_suffix('d')
+        .map(|number| (number, 24 * 60 * 60))
+        .or_else(|| value.strip_suffix('h').map(|number| (number, 60 * 60)))
+        .or_else(|| value.strip_suffix('m').map(|number| (number, 60)))
+        .or_else(|| value.strip_suffix('s').map(|number| (number, 1)))
+    else {
+        bail!("invalid duration {value:?}; expected forever, 14d, 24h, 30m, or 60s");
+    };
+
+    let amount = number
+        .parse::<u64>()
+        .with_context(|| format!("invalid duration amount in {value:?}"))?;
+
+    Ok(Some(amount * multiplier))
+}
+
+fn days(days: u64) -> Option<u64> {
+    Some(days * 24 * 60 * 60)
+}
+
+fn rule(
+    priority: u32,
+    ref_pattern: &str,
+    ttl_seconds: Option<u64>,
+    keep_builds: Option<u32>,
+) -> ProjectRetentionRuleInfo {
+    ProjectRetentionRuleInfo {
+        priority,
+        ref_pattern: ref_pattern.to_owned(),
+        ttl_seconds,
+        keep_builds,
+    }
+}
+
+fn print_retention_policy(
+    writer: &mut impl Write,
+    json_output: bool,
+    policy: ProjectRetentionPolicyInfo,
+) -> Result<()> {
+    if json_output {
+        output::print_json(writer, &policy)?;
+    } else {
+        writeln!(
+            writer,
+            "{}\tinherited_default={}\tkeep_latest_builds_per_ref={}\tobject_delete_grace_seconds={}",
+            policy.project,
+            policy.inherited_default,
+            policy.keep_latest_builds_per_ref,
+            policy.object_delete_grace_seconds,
+        )?;
+
+        for rule in policy.rules {
+            let ttl = rule
+                .ttl_seconds
+                .map(format_duration_seconds)
+                .unwrap_or_else(|| "forever".to_owned());
+            let keep = rule
+                .keep_builds
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_owned());
+            writeln!(
+                writer,
+                "rule\tpriority={}\tref={}\tttl={}\tkeep_builds={}",
+                rule.priority, rule.ref_pattern, ttl, keep
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn format_duration_seconds(seconds: u64) -> String {
+    const DAY: u64 = 24 * 60 * 60;
+    const HOUR: u64 = 60 * 60;
+    const MINUTE: u64 = 60;
+
+    if seconds.is_multiple_of(DAY) {
+        format!("{}d", seconds / DAY)
+    } else if seconds.is_multiple_of(HOUR) {
+        format!("{}h", seconds / HOUR)
+    } else if seconds.is_multiple_of(MINUTE) {
+        format!("{}m", seconds / MINUTE)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 async fn project_exists(client: &CacheClient, project: &ProjectSlug) -> Result<bool> {
@@ -693,5 +1078,78 @@ mod tests {
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("already absent"));
+    }
+
+    #[test]
+    fn parse_duration_accepts_forever_and_units() {
+        assert_eq!(parse_duration_seconds("forever").unwrap(), None);
+        assert_eq!(
+            parse_duration_seconds("14d").unwrap(),
+            Some(14 * 24 * 60 * 60)
+        );
+        assert_eq!(parse_duration_seconds("24h").unwrap(), Some(24 * 60 * 60));
+        assert_eq!(parse_duration_seconds("30m").unwrap(), Some(30 * 60));
+        assert_eq!(parse_duration_seconds("60s").unwrap(), Some(60));
+    }
+
+    #[test]
+    fn parse_retention_rule_accepts_default_keep_builds() {
+        let rule = parse_retention_rule("40:refs/heads/*:60d:default").unwrap();
+
+        assert_eq!(rule.priority, 40);
+        assert_eq!(rule.ref_pattern, "refs/heads/*");
+        assert_eq!(rule.ttl_seconds, Some(60 * 24 * 60 * 60));
+        assert_eq!(rule.keep_builds, None);
+    }
+
+    #[test]
+    fn balanced_profile_matches_expected_defaults() {
+        let command = SetProjectRetentionCommand {
+            project: EXAMPLE_PROJECT_SLUG.to_owned(),
+            profile: Some(RetentionProfile::Balanced),
+            keep_builds: None,
+            object_delete_grace: None,
+            rules: Vec::new(),
+        };
+
+        let (profile, request) = retention_request_from_command(&command).unwrap();
+
+        assert_eq!(profile, "balanced");
+        assert_eq!(request.keep_latest_builds_per_ref, 2);
+        assert_eq!(request.object_delete_grace_seconds, 24 * 60 * 60);
+        assert!(
+            request
+                .rules
+                .iter()
+                .any(|rule| rule.ref_pattern == "refs/pull/*"
+                    && rule.ttl_seconds == Some(14 * 24 * 60 * 60)
+                    && rule.keep_builds == Some(1))
+        );
+    }
+
+    #[test]
+    fn custom_rules_require_keep_builds_and_grace() {
+        let command = SetProjectRetentionCommand {
+            project: EXAMPLE_PROJECT_SLUG.to_owned(),
+            profile: None,
+            keep_builds: None,
+            object_delete_grace: Some("24h".to_owned()),
+            rules: vec!["10:*:30d:1".to_owned()],
+        };
+
+        assert!(retention_request_from_command(&command).is_err());
+    }
+
+    #[test]
+    fn profile_and_rules_cannot_be_mixed() {
+        let command = SetProjectRetentionCommand {
+            project: EXAMPLE_PROJECT_SLUG.to_owned(),
+            profile: Some(RetentionProfile::Balanced),
+            keep_builds: None,
+            object_delete_grace: None,
+            rules: vec!["10:*:30d:1".to_owned()],
+        };
+
+        assert!(retention_request_from_command(&command).is_err());
     }
 }

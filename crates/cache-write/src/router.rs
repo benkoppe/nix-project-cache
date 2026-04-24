@@ -38,6 +38,18 @@ pub fn write_router(state: WriteAppState) -> Router {
             delete(handlers::delete_project_oidc_identity),
         )
         .route(
+            "/api/projects/{project}/retention",
+            get(handlers::get_project_retention_policy),
+        )
+        .route(
+            "/api/projects/{project}/retention",
+            put(handlers::upsert_project_retention_policy),
+        )
+        .route(
+            "/api/projects/{project}/retention",
+            delete(handlers::delete_project_retention_policy),
+        )
+        .route(
             "/api/projects/{project}/upstreams",
             get(handlers::list_project_upstreams),
         )

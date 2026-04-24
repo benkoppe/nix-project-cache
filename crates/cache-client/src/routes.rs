@@ -79,6 +79,13 @@ pub fn project_oidc_identities(
     )
 }
 
+pub fn project_retention(base_url: &Url, project: &ProjectSlug) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!("api/projects/{}/retention", project.as_str()),
+    )
+}
+
 pub fn upstreams(base_url: &Url) -> Result<Url, CacheClientError> {
     join(base_url, "api/upstreams")
 }
