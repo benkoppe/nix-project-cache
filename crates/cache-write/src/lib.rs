@@ -22,8 +22,9 @@ mod tests {
     use tower::util::ServiceExt as _;
 
     use cache_api::{
-        BeginBuildResponse, DeleteProjectOidcIdentityRequest, PinInfo, ProjectInfo,
-        ProjectOidcIdentityInfo, RunGcResponse, UpsertProjectOidcIdentityRequest,
+        BeginBuildResponse, CreateAccessTokenRequest, CreateAccessTokenResponse,
+        DeleteProjectOidcIdentityRequest, PinInfo, ProjectInfo, ProjectOidcIdentityInfo,
+        RunGcResponse, UpsertProjectOidcIdentityRequest,
     };
     use cache_auth::{
         AuthError, AuthenticatedIdentity, Authorizer, OidcAuthorizer, OidcConfig,
@@ -125,6 +126,20 @@ mod tests {
             .replace_project_oidc_identity(&example_project(), "github", "owner/repo", &patterns)
             .await
             .unwrap();
+    }
+
+    async fn create_example_access_token(test_app: &WriteTestApp, ref_patterns: &[&str]) -> String {
+        let patterns = ref_patterns
+            .iter()
+            .map(|pattern| pattern.to_string())
+            .collect::<Vec<_>>();
+
+        test_app
+            .db
+            .create_access_token("ci", &example_project(), &patterns, None)
+            .await
+            .unwrap()
+            .token
     }
 
     fn build_configured_claim_oidc_authorizer() -> (OidcAuthorizer, TestOidcIssuer) {
@@ -618,6 +633,202 @@ mod tests {
                     "dry_run": true,
                 }),
             ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn project_access_token_can_begin_build_for_matching_project_and_ref() {
+        let test_app = build_test_app().await;
+        let token = create_example_access_token(&test_app, &["refs/heads/main"]).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/main",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn project_access_token_can_begin_build_for_any_ref_when_unrestricted() {
+        let test_app = build_test_app().await;
+        let token = create_example_access_token(&test_app, &[]).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/feature",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn project_access_token_cannot_begin_build_for_wrong_project() {
+        let test_app = build_test_app().await;
+        let token = create_example_access_token(&test_app, &["refs/heads/main"]).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": "other_repo",
+                    "ref_name": "refs/heads/main",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn project_access_token_cannot_begin_build_for_wrong_ref() {
+        let test_app = build_test_app().await;
+        let token = create_example_access_token(&test_app, &["refs/heads/main"]).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/feature",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn revoked_project_access_token_is_rejected() {
+        let test_app = build_test_app().await;
+        let created = test_app
+            .db
+            .create_access_token(
+                "ci",
+                &example_project(),
+                &["refs/heads/main".to_owned()],
+                None,
+            )
+            .await
+            .unwrap();
+        let token_id = created.records[0].id.clone();
+
+        assert!(test_app.db.revoke_access_token(&token_id).await.unwrap());
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &created.token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/main",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn expired_project_access_token_is_rejected() {
+        let test_app = build_test_app().await;
+
+        let create_response = test_app
+            .app
+            .clone()
+            .oneshot(authed_json(
+                Method::POST,
+                "/api/access-tokens",
+                json!(CreateAccessTokenRequest {
+                    name: "ci".to_owned(),
+                    project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                    ref_patterns: vec!["refs/heads/main".to_owned()],
+                    expires_at: Some("2000-01-01T00:00:00Z".to_owned()),
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+
+        let created: CreateAccessTokenResponse = body_json(create_response).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(bearer_json(
+                &created.token,
+                Method::POST,
+                "/api/builds",
+                json!({
+                    "project": EXAMPLE_PROJECT_SLUG,
+                    "ref_name": "refs/heads/main",
+                    "revision": "deadbeef",
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn project_access_token_cannot_manage_admin_only_access_tokens() {
+        let test_app = build_test_app().await;
+        let token = create_example_access_token(&test_app, &["refs/heads/main"]).await;
+
+        let response = test_app
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/access-tokens")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
