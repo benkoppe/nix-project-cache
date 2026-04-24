@@ -24,6 +24,12 @@ pub enum Command {
 
     #[command(subcommand)]
     Tokens(TokensCommand),
+
+    #[command(subcommand)]
+    Pins(PinsCommand),
+
+    #[command(subcommand)]
+    Gc(GcCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -125,4 +131,53 @@ pub struct RevokeTokenCommand {
 
     #[arg(long)]
     pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PinsCommand {
+    List(ListPinsCommand),
+    Create(CreatePinCommand),
+    Delete(DeletePinCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct ListPinsCommand {
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct CreatePinCommand {
+    pub name: String,
+
+    #[arg(long)]
+    pub store_path: String,
+
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct DeletePinCommand {
+    pub name: String,
+
+    #[arg(long)]
+    pub project: Option<String>,
+
+    #[arg(long)]
+    pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GcCommand {
+    Run(RunGcCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct RunGcCommand {
+    #[arg(long)]
+    pub dry_run: bool,
+
+    #[arg(long)]
+    pub grace_period_seconds: Option<u64>,
 }

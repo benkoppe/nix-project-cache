@@ -1,5 +1,7 @@
 mod cli;
+mod gc;
 mod output;
+mod pins;
 mod projects;
 mod tokens;
 
@@ -38,5 +40,7 @@ async fn main() -> Result<()> {
     match command {
         Command::Projects(command) => projects::handle(&client, &mut stdout, json, command).await,
         Command::Tokens(command) => tokens::handle(&client, &mut stdout, json, command).await,
+        Command::Pins(command) => pins::handle(&client, &mut stdout, json, command).await,
+        Command::Gc(command) => gc::handle(&client, &mut stdout, json, command).await,
     }
 }

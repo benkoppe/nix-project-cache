@@ -812,7 +812,13 @@ mod tests {
             .await
             .unwrap();
 
-        let gc = client.run_gc(RunGcRequest { dry_run: true }).await.unwrap();
+        let gc = client
+            .run_gc(RunGcRequest {
+                dry_run: true,
+                grace_period_seconds: None,
+            })
+            .await
+            .unwrap();
         assert_eq!(gc.deleted_count, 1);
         assert_eq!(gc.deleted_objects, vec!["nar/stale.nar.zst".to_owned()]);
 

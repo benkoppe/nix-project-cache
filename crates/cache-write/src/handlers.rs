@@ -339,7 +339,20 @@ pub async fn run_gc(
         return authorization_error_response(error);
     }
 
-    match state.gc_service.run_local_gc(request.dry_run).await {
+    let gc_result = match request.grace_period_seconds {
+        Some(grace_period_seconds) => match i64::try_from(grace_period_seconds) {
+            Ok(grace_period_seconds) => {
+                state
+                    .gc_service
+                    .run_local_gc_with_grace_period(request.dry_run, grace_period_seconds)
+                    .await
+            }
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => state.gc_service.run_local_gc(request.dry_run).await,
+    };
+
+    match gc_result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => {
             tracing::error!(?error, "run_gc failed");
