@@ -6,13 +6,16 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 use cache_api::{
-    BeginBuildRequest, CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest,
-    PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsRequest, RunGcRequest,
-    UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    AccessTokenInfo, BeginBuildRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
+    CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest, PinInfo, ProjectInfo,
+    ProjectOidcIdentityInfo, RegisterPathsRequest, RunGcRequest, UpsertProjectOidcIdentityRequest,
+    UpsertProjectRequest,
 };
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
@@ -22,6 +25,11 @@ use crate::state::WriteAppState;
 
 #[derive(Debug, Deserialize)]
 pub struct PinQuery {
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccessTokenQuery {
     pub project: Option<String>,
 }
 
@@ -553,6 +561,128 @@ pub async fn delete_project_oidc_identity(
     }
 }
 
+pub async fn create_access_token(
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<CreateAccessTokenRequest>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match ProjectSlug::parse(&request.project) {
+        Ok(project) => project,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    let expires_at = match request.expires_at.as_deref() {
+        Some(value) => match OffsetDateTime::parse(value, &Rfc3339) {
+            Ok(value) => Some(value),
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => None,
+    };
+
+    match state
+        .db
+        .create_access_token(&request.name, &project, &request.ref_patterns, expires_at)
+        .await
+    {
+        Ok(created) => {
+            let mut infos = access_token_info_from_records(created.records);
+            let Some(info) = infos.pop() else {
+                tracing::error!("created access token returned no metadata");
+                return StatusCode::BAD_REQUEST.into_response();
+            };
+            (
+                StatusCode::OK,
+                Json(CreateAccessTokenResponse {
+                    token: created.token,
+                    info,
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::error!(?error, "create_access_token failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn list_access_tokens(
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<AccessTokenQuery>,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    let project = match parse_optional_project(query.project.as_deref()) {
+        Ok(project) => project,
+        Err(status) => return status.into_response(),
+    };
+
+    match state.db.list_access_tokens(project.as_ref()).await {
+        Ok(records) => (
+            StatusCode::OK,
+            Json(access_token_info_from_records(records)),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(?error, "list_access_tokens failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn revoke_access_token(
+    Path(token_id): Path<String>,
+    State(state): State<WriteAppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let principal = match state
+        .authorization_service
+        .authorize_headers(&headers)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return authorization_error_response(error),
+    };
+
+    if let Err(error) = principal.require_admin() {
+        return authorization_error_response(error);
+    }
+
+    match state.db.revoke_access_token(&token_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "revoke_access_token failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
 async fn require_build_access(
     state: &WriteAppState,
     principal: &AuthorizedPrincipal,
@@ -589,4 +719,55 @@ fn parse_optional_project(project: Option<&str>) -> Result<Option<ProjectSlug>, 
             .map_err(|_| StatusCode::BAD_REQUEST),
         None => Ok(None),
     }
+}
+
+fn access_token_info_from_records(
+    records: Vec<cache_db::AccessTokenRecord>,
+) -> Vec<AccessTokenInfo> {
+    let mut grouped = BTreeMap::<
+        (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
+        Vec<String>,
+    >::new();
+
+    for record in records {
+        let key = (
+            record.id,
+            record.name,
+            record.project_slug.as_str().to_owned(),
+            record.created_at.to_string(),
+            record.expires_at.map(|value| value.to_string()),
+            record.revoked_at.map(|value| value.to_string()),
+        );
+
+        let entry = grouped.entry(key).or_default();
+        if let Some(pattern) = record.ref_pattern {
+            entry.push(pattern);
+        }
+    }
+
+    grouped
+        .into_iter()
+        .map(
+            |((id, name, project, created_at, expires_at, revoked_at), mut ref_patterns)| {
+                ref_patterns.sort();
+                ref_patterns.dedup();
+                AccessTokenInfo {
+                    id,
+                    name,
+                    project,
+                    ref_patterns,
+                    created_at,
+                    expires_at,
+                    revoked_at,
+                }
+            },
+        )
+        .collect()
 }

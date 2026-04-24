@@ -1,9 +1,11 @@
+pub mod access_tokens;
 pub mod builds;
 pub mod gc;
 pub mod oidc_identities;
 pub mod pins;
 pub mod projects;
 
+pub use access_tokens::{AccessTokenInfo, CreateAccessTokenRequest, CreateAccessTokenResponse};
 pub use builds::{
     BeginBuildRequest, BeginBuildResponse, FinalizeBuildRequest, FinalizeBuildResponse,
     NarInfoPayload, RegisterPathsRequest, RegisterPathsResponse, RequiredUpload,

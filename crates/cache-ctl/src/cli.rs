@@ -21,6 +21,9 @@ pub struct Cli {
 pub enum Command {
     #[command(subcommand)]
     Projects(ProjectsCommand),
+
+    #[command(subcommand)]
+    Tokens(TokensCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -84,6 +87,41 @@ pub struct RemoveProjectOidcCommand {
 
     #[arg(long)]
     pub repository: String,
+
+    #[arg(long)]
+    pub ignore_missing: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TokensCommand {
+    List(ListTokensCommand),
+    Create(CreateTokenCommand),
+    Revoke(RevokeTokenCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct ListTokensCommand {
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct CreateTokenCommand {
+    pub name: String,
+
+    #[arg(long)]
+    pub project: String,
+
+    #[arg(long = "ref")]
+    pub ref_patterns: Vec<String>,
+
+    #[arg(long)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct RevokeTokenCommand {
+    pub token_id: String,
 
     #[arg(long)]
     pub ignore_missing: bool,

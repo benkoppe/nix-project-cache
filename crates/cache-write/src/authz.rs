@@ -55,17 +55,25 @@ impl AuthorizationService {
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::trim);
 
-        let identity = match self.authorizer.authorize_bearer(bearer).await {
-            Ok(identity) => identity,
-            Err(AuthError::Disabled) | Err(AuthError::Unavailable(_)) => {
-                return Err(AuthorizationServiceError::ServiceUnavailable);
+        match self.authorizer.authorize_bearer(bearer).await {
+            Ok(identity) => self.resolve_identity(identity).await,
+            Err(AuthError::MissingToken) => Err(AuthorizationServiceError::Unauthorized),
+            Err(AuthError::InvalidToken) => {
+                if let Some(token) = bearer {
+                    self.resolve_access_token(token).await
+                } else {
+                    Err(AuthorizationServiceError::Unauthorized)
+                }
             }
-            Err(AuthError::MissingToken) | Err(AuthError::InvalidToken) => {
-                return Err(AuthorizationServiceError::Unauthorized);
+            Err(AuthError::Disabled) => {
+                if let Some(token) = bearer {
+                    self.resolve_access_token(token).await
+                } else {
+                    Err(AuthorizationServiceError::ServiceUnavailable)
+                }
             }
-        };
-
-        self.resolve_identity(identity).await
+            Err(AuthError::Unavailable(_)) => Err(AuthorizationServiceError::ServiceUnavailable),
+        }
     }
 
     async fn resolve_identity(
@@ -148,6 +156,48 @@ impl AuthorizationService {
             }
             IdentityKind::AccessToken(_) => Err(AuthorizationServiceError::Forbidden),
         }
+    }
+
+    async fn resolve_access_token(
+        &self,
+        token: &str,
+    ) -> Result<AuthorizedPrincipal, AuthorizationServiceError> {
+        let records = self
+            .db
+            .list_active_access_token_records_by_token(token)
+            .await
+            .map_err(|error| {
+                tracing::error!(?error, "looking up access token failed");
+                AuthorizationServiceError::ServiceUnavailable
+            })?;
+
+        if records.is_empty() {
+            return Err(AuthorizationServiceError::Unauthorized);
+        }
+
+        let first = records[0].clone();
+        let ref_patterns = if records.iter().any(|record| record.ref_pattern.is_none()) {
+            Vec::new()
+        } else {
+            let mut patterns = records
+                .into_iter()
+                .filter_map(|record| record.ref_pattern)
+                .collect::<Vec<_>>();
+            patterns.sort();
+            patterns.dedup();
+            patterns
+        };
+
+        Ok(AuthorizedPrincipal {
+            identity: AuthenticatedIdentity::access_token(
+                first.id.clone(),
+                format!("access-token:{}", first.name),
+            ),
+            scope: AuthorizedScope::Project {
+                project: first.project_slug,
+                ref_patterns,
+            },
+        })
     }
 }
 

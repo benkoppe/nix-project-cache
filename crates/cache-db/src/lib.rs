@@ -1,3 +1,4 @@
+mod access_tokens;
 mod builds;
 mod gc;
 mod models;
@@ -10,8 +11,8 @@ mod projects;
 mod upstreams;
 
 pub use models::{
-    BuildContextRecord, BuildRecord, BuildStatus, PinRecord, ProjectOidcIdentityRecord,
-    ProjectRecord,
+    AccessTokenRecord, BuildContextRecord, BuildRecord, BuildStatus, PinRecord,
+    ProjectOidcIdentityRecord, ProjectRecord,
 };
 pub use objects::LocalObjectRecord;
 pub use pool::SqliteDatabase;

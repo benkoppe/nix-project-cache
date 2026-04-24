@@ -52,7 +52,8 @@ jsonwebtoken = { version = "10", default-features = false, features = [
   "use_pem",
 ] }
 rsa = { version = "0.9", features = ["pem"] }
-uuid = { version = "1", features = ["serde", "v7"] }
+uuid = { version = "1", features = ["serde", "v7", "v4"] }
+sha2 = "0.11"
 base64 = "0.22"
 hex = "0.4"
 bytes = "1.11"

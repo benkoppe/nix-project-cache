@@ -6,7 +6,8 @@ use tokio::io::AsyncRead;
 use tokio_util::io::ReaderStream;
 
 use cache_api::{
-    BeginBuildRequest, BeginBuildResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
+    AccessTokenInfo, BeginBuildRequest, BeginBuildResponse, CreateAccessTokenRequest,
+    CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
     FinalizeBuildResponse, PinInfo, ProjectInfo, ProjectOidcIdentityInfo, RegisterPathsResponse,
     RunGcRequest, RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
 };
@@ -258,6 +259,41 @@ impl CacheClient {
             .json(&request)
             .send()
             .await?;
+
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(self.unexpected_status(response, status).await),
+        }
+    }
+
+    pub async fn create_access_token(
+        &self,
+        request: CreateAccessTokenRequest,
+    ) -> Result<CreateAccessTokenResponse, CacheClientError> {
+        let url = routes::access_tokens(&self.base_url, None)?;
+        let response = self
+            .request(Method::POST, url)
+            .json(&request)
+            .send()
+            .await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn list_access_tokens(
+        &self,
+        project: Option<&ProjectSlug>,
+    ) -> Result<Vec<AccessTokenInfo>, CacheClientError> {
+        let url = routes::access_tokens(&self.base_url, project)?;
+        let response = self.request(Method::GET, url).send().await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn revoke_access_token(&self, token_id: &str) -> Result<bool, CacheClientError> {
+        let url = routes::revoke_access_token(&self.base_url, token_id)?;
+        let response = self.request(Method::DELETE, url).send().await?;
 
         match response.status() {
             StatusCode::NO_CONTENT => Ok(true),

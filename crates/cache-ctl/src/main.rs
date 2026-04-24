@@ -1,6 +1,7 @@
 mod cli;
 mod output;
 mod projects;
+mod tokens;
 
 use anyhow::{Context as _, Result};
 use clap::Parser as _;
@@ -30,5 +31,6 @@ async fn main() -> Result<()> {
 
     match command {
         Command::Projects(command) => projects::handle(&client, &mut stdout, json, command).await,
+        Command::Tokens(command) => tokens::handle(&client, &mut stdout, json, command).await,
     }
 }

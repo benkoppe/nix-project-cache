@@ -79,6 +79,22 @@ pub fn project_oidc_identities(
     )
 }
 
+pub fn access_tokens(
+    base_url: &Url,
+    project: Option<&ProjectSlug>,
+) -> Result<Url, CacheClientError> {
+    let mut url = join(base_url, "api/access-tokens")?;
+    if let Some(project) = project {
+        url.query_pairs_mut()
+            .append_pair("project", project.as_str());
+    }
+    Ok(url)
+}
+
+pub fn revoke_access_token(base_url: &Url, token_id: &str) -> Result<Url, CacheClientError> {
+    join(base_url, &format!("api/access-tokens/{token_id}"))
+}
+
 fn join(base_url: &Url, path: &str) -> Result<Url, CacheClientError> {
     base_url
         .join(path)

@@ -75,6 +75,60 @@ impl ProjectOidcIdentityLookupRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct AccessTokenLookupRow {
+    pub id: String,
+    pub name: String,
+    pub project_slug: String,
+    pub ref_pattern: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccessTokenRecord {
+    pub id: String,
+    pub name: String,
+    pub project_slug: ProjectSlug,
+    pub ref_pattern: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub expires_at: Option<OffsetDateTime>,
+    pub revoked_at: Option<OffsetDateTime>,
+}
+
+impl AccessTokenLookupRow {
+    pub fn into_record(self) -> Result<AccessTokenRecord> {
+        Ok(AccessTokenRecord {
+            id: self.id,
+            name: self.name,
+            project_slug: ProjectSlug::parse(&self.project_slug)
+                .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.project_slug))?,
+            ref_pattern: if self.ref_pattern.is_empty() {
+                None
+            } else {
+                Some(self.ref_pattern)
+            },
+            created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
+                .context("parsing access token created_at")?,
+            expires_at: self
+                .expires_at
+                .map(|value| {
+                    OffsetDateTime::parse(&value, &Rfc3339)
+                        .context("parsing access token expires_at")
+                })
+                .transpose()?,
+            revoked_at: self
+                .revoked_at
+                .map(|value| {
+                    OffsetDateTime::parse(&value, &Rfc3339)
+                        .context("parsing access token revoked_at")
+                })
+                .transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UpstreamCacheLookupRow {
     pub id: String,
     pub name: String,

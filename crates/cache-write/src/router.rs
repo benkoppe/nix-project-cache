@@ -37,5 +37,11 @@ pub fn write_router(state: WriteAppState) -> Router {
             "/api/projects/{project}/oidc-identities",
             delete(handlers::delete_project_oidc_identity),
         )
+        .route("/api/access-tokens", get(handlers::list_access_tokens))
+        .route("/api/access-tokens", post(handlers::create_access_token))
+        .route(
+            "/api/access-tokens/{token_id}",
+            delete(handlers::revoke_access_token),
+        )
         .with_state(state)
 }
