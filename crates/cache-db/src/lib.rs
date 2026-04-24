@@ -414,12 +414,15 @@ mod tests {
     async fn gc_retains_latest_builds_for_active_refs_according_to_policy() {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
+
         db.insert_project(&project, "Example Repo", true)
             .await
             .unwrap();
+
         let narinfo = sample_narinfo();
         let hash = sample_hash();
         db.upsert_path_info(&narinfo).await.unwrap();
+
         let old_build = db
             .begin_build(&project, "refs/heads/main", None)
             .await
@@ -428,6 +431,7 @@ mod tests {
         db.publish_build_to_ref(&project, "refs/heads/main", old_build.id)
             .await
             .unwrap();
+
         let new_build = db
             .begin_build(&project, "refs/heads/main", None)
             .await
@@ -436,7 +440,9 @@ mod tests {
         db.publish_build_to_ref(&project, "refs/heads/main", new_build.id)
             .await
             .unwrap();
+
         let retained = db.list_retained_build_ids_for_gc().await.unwrap();
+
         assert!(retained.contains(&old_build.id.to_string()));
         assert!(retained.contains(&new_build.id.to_string()));
     }
