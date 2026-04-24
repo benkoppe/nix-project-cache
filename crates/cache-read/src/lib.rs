@@ -6,7 +6,7 @@ pub mod service;
 pub mod state;
 pub mod upstreams;
 
-pub use local_objects::DbBackedLocalObjectStore;
+pub use local_objects::{DbBackedLocalObjectStore, ViewLocalObjectStore};
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::read_router;
 pub use service::ReadService;
@@ -194,6 +194,18 @@ mod tests {
         let response = get(read_router(sample_state()), &project_cache_info_path()).await;
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nix_cache_info_includes_public_keys() {
+        let response = get(read_router(sample_state()), "/nix-cache-info").await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = body_to_string(response).await;
+        assert!(body.contains("StoreDir: /nix/store\n"));
+        assert!(body.contains("WantMassQuery: 1\n"));
+        assert!(body.contains("Priority: 30\n"));
+        assert!(body.contains("PublicKey: cache.example.com-1:"));
     }
 
     #[tokio::test]

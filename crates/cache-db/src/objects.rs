@@ -4,6 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use cache_core::nix::StorePathHash;
 use cache_core::storage::{LocalBackendName, PathObjectKind};
+use cache_core::view::CacheView;
 use cache_store::blob::BlobMetadata;
 
 use crate::models::LocalObjectLookupRow;
@@ -124,6 +125,54 @@ impl SqliteDatabase {
         .context("fetching local object")?;
 
         row.map(LocalObjectLookupRow::into_record).transpose()
+    }
+
+    pub async fn local_object_visible_in_view(
+        &self,
+        view: &CacheView,
+        object_path: &str,
+    ) -> Result<bool> {
+        let value = match view {
+            CacheView::Aggregate => sqlx::query!(
+                r#"
+                SELECT 1 AS "present!: i64"
+                FROM path_objects po
+                JOIN aggregate_visible_paths avp
+                    ON avp.store_path_hash = po.store_path_hash
+                WHERE po.object_path = ?
+                LIMIT 1
+                "#,
+                object_path,
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .context("checking aggregate object visibility")?
+            .is_some(),
+            CacheView::Project(project) => {
+                let project_slug = project.as_str();
+                sqlx::query!(
+                    r#"
+                SELECT 1 AS "present!: i64"
+                FROM path_objects po
+                JOIN project_visible_paths pvp
+                    ON pvp.store_path_hash = po.store_path_hash
+                JOIN projects p
+                    ON p.id = pvp.project_id
+                WHERE p.slug = ?
+                  AND po.object_path = ?
+                LIMIT 1
+                "#,
+                    project_slug,
+                    object_path,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .context("checking project object visibility")?
+                .is_some()
+            }
+        };
+
+        Ok(value)
     }
 
     pub async fn link_path_object(

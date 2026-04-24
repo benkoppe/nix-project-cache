@@ -257,3 +257,92 @@ async fn project_route_serves_upstream_backed_path_without_local_upload() -> Res
 
     Ok(())
 }
+
+#[tokio::test]
+async fn private_project_object_is_not_readable_from_aggregate() -> Result<()> {
+    let app = TestApp::spawn().await?;
+    let write_client = app.cache_client();
+    let read_client = app.http_client();
+
+    let project = ProjectSlug::parse("private_repo").unwrap();
+    let path = hello_path();
+    let hash = path.hash();
+
+    write_client
+        .upsert_project(&project, "Private Repo", false)
+        .await?;
+
+    publish_single_path(
+        &write_client,
+        &project,
+        "refs/heads/main",
+        "deadbeef",
+        path,
+        Bytes::from_static(b"private-bytes"),
+    )
+    .await?;
+
+    let aggregate_narinfo = read_client
+        .get(app.url(format!("{}.narinfo", hash.as_str())))
+        .send()
+        .await?;
+    assert_eq!(aggregate_narinfo.status(), StatusCode::NOT_FOUND);
+
+    let aggregate_object = read_client.get(app.url(path.url())).send().await?;
+    assert_eq!(aggregate_object.status(), StatusCode::NOT_FOUND);
+
+    let project_object = read_client
+        .get(app.url(format!("p/{}/{}", project.as_str(), path.url())))
+        .send()
+        .await?;
+    assert_eq!(project_object.status(), StatusCode::OK);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_object_is_not_readable_from_other_project() -> Result<()> {
+    let app = TestApp::spawn().await?;
+    let write_client = app.cache_client();
+    let read_client = app.http_client();
+
+    let project_a = ProjectSlug::parse("project_a").unwrap();
+    let project_b = ProjectSlug::parse("project_b").unwrap();
+    let path = hello_path();
+    let hash = path.hash();
+
+    write_client
+        .upsert_project(&project_a, "Project A", true)
+        .await?;
+    write_client
+        .upsert_project(&project_b, "Project B", true)
+        .await?;
+
+    publish_single_path(
+        &write_client,
+        &project_a,
+        "refs/heads/main",
+        "deadbeef",
+        path,
+        Bytes::from_static(b"project-a-bytes"),
+    )
+    .await?;
+
+    let project_b_narinfo = read_client
+        .get(app.url(format!(
+            "p/{}/{}.narinfo",
+            project_b.as_str(),
+            hash.as_str()
+        )))
+        .send()
+        .await?;
+    assert_eq!(project_b_narinfo.status(), StatusCode::NOT_FOUND);
+
+    let project_b_object = read_client
+        .get(app.url(format!("p/{}/{}", project_b.as_str(), path.url())))
+        .send()
+        .await?;
+    assert_eq!(project_b_object.status(), StatusCode::NOT_FOUND);
+
+    Ok(())
+}

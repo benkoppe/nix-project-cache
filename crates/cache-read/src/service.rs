@@ -7,16 +7,16 @@ use cache_core::nix::{StoreDir, StorePathHash};
 use cache_core::signing::NarInfoSigner;
 use cache_core::view::CacheView;
 use cache_store::blob::{BlobBytes, BlobMetadata};
-use cache_store::local::LocalObjectStore;
 use cache_store::upstream::UpstreamCacheClient;
 
+use crate::local_objects::ViewLocalObjectStore;
 use crate::resolver::NarInfoResolver;
 use crate::upstreams::UpstreamSelector;
 
 #[derive(Clone)]
 pub struct ReadService {
     local_resolver: Arc<dyn NarInfoResolver>,
-    local_objects: Arc<dyn LocalObjectStore>,
+    local_objects: Arc<dyn ViewLocalObjectStore>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
     upstream_selector: Arc<dyn UpstreamSelector>,
     renderer: NarInfoRenderer,
@@ -26,7 +26,7 @@ pub struct ReadService {
 impl ReadService {
     pub fn new(
         local_resolver: Arc<dyn NarInfoResolver>,
-        local_objects: Arc<dyn LocalObjectStore>,
+        local_objects: Arc<dyn ViewLocalObjectStore>,
         upstream_client: Arc<dyn UpstreamCacheClient>,
         upstream_selector: Arc<dyn UpstreamSelector>,
         renderer: NarInfoRenderer,
@@ -44,6 +44,10 @@ impl ReadService {
 
     pub fn store_dir(&self) -> &StoreDir {
         self.renderer.store_dir()
+    }
+
+    pub fn public_key_texts(&self) -> Vec<String> {
+        self.signer.public_key_texts()
     }
 
     pub async fn render_narinfo(
@@ -78,7 +82,7 @@ impl ReadService {
         view: &CacheView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
-        if let Some(result) = self.local_objects.get(object_path).await? {
+        if let Some(result) = self.local_objects.get_visible(view, object_path).await? {
             return Ok(Some(result));
         }
 

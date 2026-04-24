@@ -1,10 +1,32 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use cache_store::InMemoryLocalObjectStore;
 use tracing::warn;
 
+use cache_core::view::CacheView;
 use cache_db::SqliteDatabase;
 use cache_store::blob::{BlobBytes, BlobMetadata};
 use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore};
+
+#[async_trait]
+pub trait ViewLocalObjectStore: Send + Sync + 'static {
+    async fn get_visible(
+        &self,
+        view: &CacheView,
+        object_path: &str,
+    ) -> Result<Option<(BlobMetadata, BlobBytes)>>;
+}
+
+#[async_trait]
+impl ViewLocalObjectStore for InMemoryLocalObjectStore {
+    async fn get_visible(
+        &self,
+        _view: &CacheView,
+        object_path: &str,
+    ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
+        self.get(object_path).await
+    }
+}
 
 #[derive(Clone)]
 pub struct DbBackedLocalObjectStore {
@@ -15,6 +37,51 @@ pub struct DbBackedLocalObjectStore {
 impl DbBackedLocalObjectStore {
     pub fn new(db: SqliteDatabase, backends: LocalObjectBackendRegistry) -> Self {
         Self { db, backends }
+    }
+
+    async fn get_unscoped(&self, object_path: &str) -> Result<Option<(BlobMetadata, BlobBytes)>> {
+        let Some(record) = self.db.get_local_object(object_path).await? else {
+            return Ok(None);
+        };
+
+        let Some(backend) = self.backends.get(&record.storage_backend) else {
+            return Err(anyhow!(
+                "no local object backend registered for {}",
+                record.storage_backend
+            ));
+        };
+
+        match backend.get_bytes(&record.storage_key).await? {
+            Some(bytes) => Ok(Some((record.metadata, bytes))),
+            None => {
+                warn!(
+                    object_path,
+                    storage_backend = %record.storage_backend,
+                    storage_key = %record.storage_key,
+                    "local object metadata exists but backend object is missing"
+                );
+                Ok(None)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ViewLocalObjectStore for DbBackedLocalObjectStore {
+    async fn get_visible(
+        &self,
+        view: &CacheView,
+        object_path: &str,
+    ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
+        if !self
+            .db
+            .local_object_visible_in_view(view, object_path)
+            .await?
+        {
+            return Ok(None);
+        }
+
+        self.get_unscoped(object_path).await
     }
 }
 
@@ -46,29 +113,7 @@ impl LocalObjectStore for DbBackedLocalObjectStore {
     }
 
     async fn get(&self, object_path: &str) -> Result<Option<(BlobMetadata, BlobBytes)>> {
-        let Some(record) = self.db.get_local_object(object_path).await? else {
-            return Ok(None);
-        };
-
-        let Some(backend) = self.backends.get(&record.storage_backend) else {
-            return Err(anyhow!(
-                "no local object backend registered for {}",
-                record.storage_backend
-            ));
-        };
-
-        match backend.get_bytes(&record.storage_key).await? {
-            Some(bytes) => Ok(Some((record.metadata, bytes))),
-            None => {
-                warn!(
-                    object_path,
-                    storage_backend = %record.storage_backend,
-                    storage_key = %record.storage_key,
-                    "local object metadata exists but backend object is missing"
-                );
-                Ok(None)
-            }
-        }
+        self.get_unscoped(object_path).await
     }
 }
 
