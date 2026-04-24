@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tempfile::TempDir;
 
-use cache_app::build_app_with_parts;
+use cache_app::{AppParts, build_app_with_parts};
 use cache_client::CacheClient;
 use cache_core::nix::StoreDir;
 use cache_core::storage::LocalBackendName;
@@ -47,14 +47,16 @@ impl TestApp {
         upstream_client: Arc<dyn UpstreamCacheClient>,
     ) -> Result<Self> {
         let app = build_app_with_parts(
-            db,
-            StoreDir::default(),
-            Some(test_signing_key()),
-            None,
-            filesystem_backends_in(&temp_dir),
-            Some(LocalBackendName::fs()),
+            AppParts {
+                db,
+                store_dir: StoreDir::default(),
+                aggregate_signing_key: Some(test_signing_key()),
+                key_encryption_key: None,
+                local_backends: filesystem_backends_in(&temp_dir),
+                writable_local_backend: Some(LocalBackendName::fs()),
+                upstream_client,
+            },
             Some(WRITE_TOKEN.to_owned()),
-            upstream_client,
         );
 
         let server = TestServer::spawn(app).await?;

@@ -161,11 +161,14 @@ mod tests {
     const PIN_NAME: &str = "release";
     const STORE_PATH: &str = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-release";
 
+    type Shared<T> = Arc<Mutex<T>>;
+    type DeletedPins = Vec<(String, Option<String>)>;
+
     #[derive(Default, Clone)]
     struct TestState {
-        auth_headers: Arc<Mutex<Vec<String>>>,
-        create_requests: Arc<Mutex<Vec<CreatePinRequest>>>,
-        deleted: Arc<Mutex<Vec<(String, Option<String>)>>>,
+        auth_headers: Shared<Vec<String>>,
+        create_requests: Shared<Vec<CreatePinRequest>>,
+        deleted: Shared<DeletedPins>,
     }
 
     #[derive(Debug, Deserialize)]

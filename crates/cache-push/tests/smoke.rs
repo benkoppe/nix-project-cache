@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use tokio::fs;
 use tokio::process::Command;
 
-use cache_app::{build_app_with_authorizer, build_app_with_parts};
+use cache_app::{AppParts, build_app_with_authorizer, build_app_with_parts};
 use cache_auth::{
     ChainAuthorizer, OidcAuthorizer, OidcConfig, OidcProviderConfig, ReqwestOidcHttpClient,
     StaticTokenAuthorizer,
@@ -170,14 +170,16 @@ async fn cache_push_can_publish_and_read_back_path() -> Result<()> {
     fixture.insert_example_project().await?;
 
     let app = build_app_with_parts(
-        fixture.db.clone(),
-        cache_core::nix::StoreDir::default(),
-        Some(test_signing_key()),
-        None,
-        filesystem_backends_in(&fixture.temp_dir),
-        Some(cache_core::storage::LocalBackendName::fs()),
+        AppParts {
+            db: fixture.db.clone(),
+            store_dir: cache_core::nix::StoreDir::default(),
+            aggregate_signing_key: Some(test_signing_key()),
+            key_encryption_key: None,
+            local_backends: filesystem_backends_in(&fixture.temp_dir),
+            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+        },
         Some(WRITE_TOKEN.to_owned()),
-        Arc::new(ReqwestUpstreamCacheClient::default()),
     );
     let server = TestServer::spawn(app).await?;
 
@@ -337,14 +339,16 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
     );
 
     let app = build_app_with_authorizer(
-        fixture.db.clone(),
-        cache_core::nix::StoreDir::default(),
-        Some(test_signing_key()),
-        None,
-        filesystem_backends_in(&fixture.temp_dir),
-        Some(cache_core::storage::LocalBackendName::fs()),
+        AppParts {
+            db: fixture.db.clone(),
+            store_dir: cache_core::nix::StoreDir::default(),
+            aggregate_signing_key: Some(test_signing_key()),
+            key_encryption_key: None,
+            local_backends: filesystem_backends_in(&fixture.temp_dir),
+            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+        },
         Arc::new(oidc_authorizer),
-        Arc::new(ReqwestUpstreamCacheClient::default()),
     );
     let server = TestServer::spawn(app).await?;
 
@@ -465,14 +469,16 @@ async fn cache_ctl_setup_then_cache_push_with_github_oidc_works() -> Result<()> 
         TestGitHubActionsOidcServer::spawn(audience, "owner/repo", "refs/heads/main").await?;
 
     let app = build_app_with_authorizer(
-        fixture.db.clone(),
-        cache_core::nix::StoreDir::default(),
-        Some(test_signing_key()),
-        None,
-        filesystem_backends_in(&fixture.temp_dir),
-        Some(cache_core::storage::LocalBackendName::fs()),
+        AppParts {
+            db: fixture.db.clone(),
+            store_dir: cache_core::nix::StoreDir::default(),
+            aggregate_signing_key: Some(test_signing_key()),
+            key_encryption_key: None,
+            local_backends: filesystem_backends_in(&fixture.temp_dir),
+            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+        },
         Arc::new(admin_and_oidc_authorizer(&oidc_server, audience)),
-        Arc::new(ReqwestUpstreamCacheClient::default()),
     );
     let server = TestServer::spawn(app).await?;
 
@@ -606,14 +612,16 @@ async fn cache_ctl_token_create_then_cache_push_with_project_token_enforces_ref_
     let project = example_project();
 
     let app = build_app_with_parts(
-        fixture.db.clone(),
-        cache_core::nix::StoreDir::default(),
-        Some(test_signing_key()),
-        None,
-        filesystem_backends_in(&fixture.temp_dir),
-        Some(cache_core::storage::LocalBackendName::fs()),
+        AppParts {
+            db: fixture.db.clone(),
+            store_dir: cache_core::nix::StoreDir::default(),
+            aggregate_signing_key: Some(test_signing_key()),
+            key_encryption_key: None,
+            local_backends: filesystem_backends_in(&fixture.temp_dir),
+            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+        },
         Some(WRITE_TOKEN.to_owned()),
-        Arc::new(ReqwestUpstreamCacheClient::default()),
     );
     let server = TestServer::spawn(app).await?;
 

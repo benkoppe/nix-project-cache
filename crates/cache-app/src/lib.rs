@@ -25,6 +25,16 @@ use cache_write::{AuthorizationService, WriteAppState, write_router};
 
 pub use config::AppConfig;
 
+pub struct AppParts {
+    pub db: SqliteDatabase,
+    pub store_dir: StoreDir,
+    pub aggregate_signing_key: Option<NamedSigningKey>,
+    pub key_encryption_key: Option<KeyEncryptionKey>,
+    pub local_backends: LocalObjectBackendRegistry,
+    pub writable_local_backend: Option<LocalBackendName>,
+    pub upstream_client: Arc<dyn UpstreamCacheClient>,
+}
+
 pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
     let db = SqliteDatabase::open(&config.db_path)
         .await
@@ -33,49 +43,34 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
     let authorizer = build_default_authorizer(config)?;
 
     Ok(build_app_with_authorizer(
-        db,
-        config.store_dir.clone(),
-        config.aggregate_signing_key.clone(),
-        config.key_encryption_key.clone(),
-        config.local_object_backends(),
-        config.writable_local_backend.clone(),
+        AppParts {
+            db,
+            store_dir: config.store_dir.clone(),
+            aggregate_signing_key: config.aggregate_signing_key.clone(),
+            key_encryption_key: config.key_encryption_key.clone(),
+            local_backends: config.local_object_backends(),
+            writable_local_backend: config.writable_local_backend.clone(),
+            upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+        },
         authorizer,
-        Arc::new(ReqwestUpstreamCacheClient::default()),
     ))
 }
 
-pub fn build_app_with_parts(
-    db: SqliteDatabase,
-    store_dir: StoreDir,
-    aggregate_signing_key: Option<NamedSigningKey>,
-    key_encryption_key: Option<KeyEncryptionKey>,
-    local_backends: LocalObjectBackendRegistry,
-    writable_local_backend: Option<LocalBackendName>,
-    write_token: Option<String>,
-    upstream_client: Arc<dyn UpstreamCacheClient>,
-) -> Router {
-    build_app_with_authorizer(
+pub fn build_app_with_parts(parts: AppParts, write_token: Option<String>) -> Router {
+    build_app_with_authorizer(parts, Arc::new(StaticTokenAuthorizer::new(write_token)))
+}
+
+pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer>) -> Router {
+    let AppParts {
         db,
         store_dir,
         aggregate_signing_key,
         key_encryption_key,
         local_backends,
         writable_local_backend,
-        Arc::new(StaticTokenAuthorizer::new(write_token)),
         upstream_client,
-    )
-}
+    } = parts;
 
-pub fn build_app_with_authorizer(
-    db: SqliteDatabase,
-    store_dir: StoreDir,
-    aggregate_signing_key: Option<NamedSigningKey>,
-    key_encryption_key: Option<KeyEncryptionKey>,
-    local_backends: LocalObjectBackendRegistry,
-    writable_local_backend: Option<LocalBackendName>,
-    authorizer: Arc<dyn Authorizer>,
-    upstream_client: Arc<dyn UpstreamCacheClient>,
-) -> Router {
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
 
     let local_objects = DbBackedLocalObjectStore::new(db.clone(), local_backends.clone());
