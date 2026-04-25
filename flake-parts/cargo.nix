@@ -56,6 +56,8 @@
           // {
             inherit pname;
             cargoExtraArgs = "-p ${pname}";
+
+            meta.mainProgram = pname;
           }
         );
 
