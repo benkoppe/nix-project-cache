@@ -5,9 +5,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum KeyEncryptionError {
-    #[error("failed to decode CACHE_KEY_ENCRYPTION_KEY: {0}")]
+    #[error("failed to decode key encryption key: {0}")]
     InvalidBase64(String),
-    #[error("CACHE_KEY_ENCRYPTION_KEY must decode to 32 bytes, got {0}")]
+    #[error("key encryption key must decode to 32 bytes, got {0}")]
     InvalidLength(usize),
     #[error("failed to generate encryption nonce: {0}")]
     NonceGeneration(String),

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod storage;
 
 use std::sync::Arc;
 
@@ -6,8 +7,7 @@ use anyhow::Context as _;
 use axum::Router;
 
 use cache_auth::{
-    Authorizer, ChainAuthorizer, OidcAuthorizer, OidcConfig, ReqwestOidcHttpClient,
-    StaticTokenAuthorizer,
+    Authorizer, ChainAuthorizer, OidcAuthorizer, ReqwestOidcHttpClient, StaticTokenAuthorizer,
 };
 use cache_core::key_crypto::KeyEncryptionKey;
 use cache_core::nix::StoreDir;
@@ -24,6 +24,7 @@ use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
 use cache_write::{AuthorizationService, WriteAppState, write_router};
 
 pub use config::AppConfig;
+pub use storage::{S3StorageConfig, StorageConfig};
 
 pub struct AppParts {
     pub db: SqliteDatabase,
@@ -36,7 +37,7 @@ pub struct AppParts {
 }
 
 pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
-    let db = SqliteDatabase::open(&config.db_path)
+    let db = SqliteDatabase::open(&config.database.path)
         .await
         .context("opening sqlite metadata database")?;
 
@@ -45,11 +46,11 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
     Ok(build_app_with_authorizer(
         AppParts {
             db,
-            store_dir: config.store_dir.clone(),
-            aggregate_signing_key: config.aggregate_signing_key.clone(),
-            key_encryption_key: config.key_encryption_key.clone(),
-            local_backends: config.local_object_backends(),
-            writable_local_backend: config.writable_local_backend.clone(),
+            store_dir: config.nix.store_dir.clone(),
+            aggregate_signing_key: config.signing.aggregate_signing_key.clone(),
+            key_encryption_key: config.signing.project_key_encryption_key.clone(),
+            local_backends: config.storage.local_object_backends()?,
+            writable_local_backend: config.storage.writable_backend.clone(),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         authorizer,
@@ -118,13 +119,10 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
 fn build_default_authorizer(config: &AppConfig) -> anyhow::Result<Arc<dyn Authorizer>> {
     let mut chain = ChainAuthorizer::new();
     chain.push(Arc::new(StaticTokenAuthorizer::new(
-        config.write_token.clone(),
+        config.auth.write_token.clone(),
     )));
 
-    if let Some(path) = &config.oidc_config_path {
-        let oidc_config = OidcConfig::load_from_path(path)
-            .with_context(|| format!("loading OIDC config from {}", path.display()))?;
-
+    if let Some(oidc_config) = config.auth.oidc.clone() {
         chain.push(Arc::new(OidcAuthorizer::new(
             oidc_config,
             Arc::new(ReqwestOidcHttpClient::default()),

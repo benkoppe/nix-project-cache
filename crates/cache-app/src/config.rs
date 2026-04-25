@@ -1,109 +1,279 @@
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
+use figment::{
+    Figment,
+    providers::{Env, Format, Serialized, Toml},
+};
+use serde::{Deserialize, Serialize};
 
+use cache_auth::OidcConfig;
 use cache_core::key_crypto::KeyEncryptionKey;
 use cache_core::nix::StoreDir;
 use cache_core::signing::NamedSigningKey;
-use cache_core::storage::LocalBackendName;
-use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
+
+use crate::storage::{RawStorageConfig, StorageConfig};
 
 #[derive(Clone)]
 pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub nix: NixConfig,
+    pub logging: LoggingConfig,
+    pub auth: AuthConfig,
+    pub signing: SigningConfig,
+    pub storage: StorageConfig,
+}
+
+#[derive(Clone)]
+pub struct ServerConfig {
     pub bind_address: String,
-    pub db_path: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct DatabaseConfig {
+    pub path: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct NixConfig {
     pub store_dir: StoreDir,
-    pub local_object_root: PathBuf,
-    pub aggregate_signing_key: Option<NamedSigningKey>,
-    pub key_encryption_key: Option<KeyEncryptionKey>,
+}
+
+#[derive(Clone)]
+pub struct LoggingConfig {
+    pub filter: String,
+}
+
+#[derive(Clone)]
+pub struct AuthConfig {
     pub write_token: Option<String>,
-    pub oidc_config_path: Option<PathBuf>,
-    pub writable_local_backend: Option<LocalBackendName>,
+    pub oidc: Option<OidcConfig>,
+}
+
+#[derive(Clone)]
+pub struct SigningConfig {
+    pub aggregate_signing_key: Option<NamedSigningKey>,
+    pub project_key_encryption_key: Option<KeyEncryptionKey>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawAppConfig {
+    server: RawServerConfig,
+    database: RawDatabaseConfig,
+    nix: RawNixConfig,
+    logging: RawLoggingConfig,
+    auth: RawAuthConfig,
+    signing: RawSigningConfig,
+    storage: RawStorageConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawServerConfig {
+    bind_address: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawDatabaseConfig {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawNixConfig {
+    store_dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawLoggingConfig {
+    filter: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawAuthConfig {
+    write_token: Option<String>,
+    oidc_config_file: Option<PathBuf>,
+    oidc: Option<OidcConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawSigningConfig {
+    aggregate_key_file: Option<PathBuf>,
+    project_key_encryption_key: Option<String>,
+}
+
+impl Default for RawServerConfig {
+    fn default() -> Self {
+        Self {
+            bind_address: "127.0.0.1:8080".to_owned(),
+        }
+    }
+}
+
+impl Default for RawDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from("./cache_db/cache.sqlite"),
+        }
+    }
+}
+
+impl Default for RawNixConfig {
+    fn default() -> Self {
+        Self {
+            store_dir: "/nix/store".to_owned(),
+        }
+    }
+}
+
+impl Default for RawLoggingConfig {
+    fn default() -> Self {
+        Self {
+            filter: "cache_app=info,cache_read=info".to_owned(),
+        }
+    }
 }
 
 impl AppConfig {
-    pub fn from_env() -> Result<Self> {
-        let bind_address =
-            env::var("CACHE_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+    pub fn load(config_path: Option<&Path>) -> Result<Self> {
+        let mut figment = Figment::new().merge(Serialized::defaults(RawAppConfig::default()));
 
-        let db_path = PathBuf::from(
-            env::var("CACHE_DB_PATH").unwrap_or_else(|_| "./cache_db/cache.sqlite".to_owned()),
-        );
+        if let Some(path) = config_path {
+            figment = figment.merge(Toml::file(path));
+        }
 
-        let store_dir_text =
-            env::var("CACHE_STORE_DIR").unwrap_or_else(|_| "/nix/store".to_owned());
-        let store_dir = StoreDir::new(store_dir_text)
+        figment = figment.merge(Env::prefixed("CACHE_APP_").split("__"));
+
+        Self::from_figment(figment)
+    }
+
+    pub fn from_figment(figment: Figment) -> Result<Self> {
+        let raw = figment
+            .extract::<RawAppConfig>()
+            .context("extracting app config")?;
+
+        raw.try_into()
+    }
+}
+
+impl TryFrom<RawAppConfig> for AppConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: RawAppConfig) -> Result<Self> {
+        Ok(Self {
+            server: raw.server.into(),
+            database: raw.database.into(),
+            nix: raw.nix.try_into()?,
+            logging: raw.logging.into(),
+            auth: raw.auth.try_into()?,
+            signing: raw.signing.try_into()?,
+            storage: raw.storage.try_into()?,
+        })
+    }
+}
+
+impl From<RawServerConfig> for ServerConfig {
+    fn from(raw: RawServerConfig) -> Self {
+        Self {
+            bind_address: raw.bind_address,
+        }
+    }
+}
+
+impl From<RawDatabaseConfig> for DatabaseConfig {
+    fn from(raw: RawDatabaseConfig) -> Self {
+        Self { path: raw.path }
+    }
+}
+
+impl TryFrom<RawNixConfig> for NixConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: RawNixConfig) -> Result<Self> {
+        let store_dir = StoreDir::new(raw.store_dir)
             .map_err(anyhow::Error::new)
-            .context("parsing CACHE_STORE_DIR")?;
+            .context("parsing nix.store_dir")?;
+        Ok(Self { store_dir })
+    }
+}
 
-        let local_object_root = PathBuf::from(
-            env::var("CACHE_OBJECT_ROOT").unwrap_or_else(|_| "./cache_objects".to_owned()),
-        );
+impl From<RawLoggingConfig> for LoggingConfig {
+    fn from(raw: RawLoggingConfig) -> Self {
+        Self { filter: raw.filter }
+    }
+}
 
-        let aggregate_signing_key = match env::var("CACHE_AGGREGATE_SIGNING_KEY_FILE") {
-            Ok(path) if !path.trim().is_empty() => {
-                let path = PathBuf::from(path);
-                let raw = std::fs::read_to_string(&path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                Some(
-                    NamedSigningKey::parse(raw.trim())
-                        .map_err(anyhow::Error::new)
-                        .with_context(|| {
-                            format!("parsing aggregate signing key from {}", path.display())
-                        })?,
-                )
-            }
-            _ => None,
-        };
+impl TryFrom<RawAuthConfig> for AuthConfig {
+    type Error = anyhow::Error;
 
-        let key_encryption_key = env::var("CACHE_KEY_ENCRYPTION_KEY")
-            .ok()
-            .map(|value| KeyEncryptionKey::parse_base64(&value).map_err(anyhow::Error::new))
-            .transpose()
-            .context("parsing CACHE_KEY_ENCRYPTION_KEY")?;
+    fn try_from(raw: RawAuthConfig) -> Result<Self> {
+        let oidc_config_file = non_empty_path(raw.oidc_config_file);
 
-        let write_token = env::var("CACHE_WRITE_TOKEN").ok();
-        let oidc_config_path = env::var("CACHE_OIDC_CONFIG").ok().map(PathBuf::from);
+        if oidc_config_file.is_some() && raw.oidc.is_some() {
+            bail!("configure either auth.oidc_config_file or auth.oidc, but not both");
+        }
 
-        let writable_local_backend = match env::var("CACHE_WRITABLE_LOCAL_BACKEND") {
-            Ok(value) if value.trim().is_empty() => None,
-            Ok(value) => Some(
-                LocalBackendName::new(value.trim())
-                    .map_err(anyhow::Error::new)
-                    .context("parsing CACHE_WRITABLE_LOCAL_BACKEND")?,
+        let oidc = match (oidc_config_file, raw.oidc) {
+            (Some(path), None) => Some(
+                OidcConfig::load_from_path(&path)
+                    .with_context(|| format!("loading OIDC config from {}", path.display()))?,
             ),
-            Err(_) => Some(LocalBackendName::fs()),
+            (None, Some(oidc)) => {
+                oidc.validate().context("validating auth.oidc")?;
+                Some(oidc)
+            }
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!(),
         };
 
         Ok(Self {
-            bind_address,
-            db_path,
-            store_dir,
-            local_object_root,
-            aggregate_signing_key,
-            key_encryption_key,
-            write_token,
-            oidc_config_path,
-            writable_local_backend,
+            write_token: non_empty_option(raw.write_token),
+            oidc,
         })
     }
+}
 
-    pub fn local_object_backends(&self) -> LocalObjectBackendRegistry {
-        let mut registry = LocalObjectBackendRegistry::new();
-        let fs_backend = Arc::new(FilesystemLocalObjectBackend::new(
-            self.local_object_root.clone(),
-        ));
+impl TryFrom<RawSigningConfig> for SigningConfig {
+    type Error = anyhow::Error;
 
-        registry.register(LocalBackendName::fs(), fs_backend.clone());
-
-        if let Some(name) = &self.writable_local_backend
-            && name.as_str() != LocalBackendName::fs().as_str()
-        {
-            registry.register(name.clone(), fs_backend);
-        }
-
-        registry
+    fn try_from(raw: RawSigningConfig) -> Result<Self> {
+        Ok(Self {
+            aggregate_signing_key: load_aggregate_signing_key(raw.aggregate_key_file.as_deref())?,
+            project_key_encryption_key: non_empty_option(raw.project_key_encryption_key)
+                .map(|value| KeyEncryptionKey::parse_base64(&value).map_err(anyhow::Error::new))
+                .transpose()
+                .context("parsing signing.project_key_encryption_key")?,
+        })
     }
+}
+
+fn load_aggregate_signing_key(path: Option<&Path>) -> Result<Option<NamedSigningKey>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    let signing_key = NamedSigningKey::parse(raw.trim())
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("parsing aggregate signing key from {}", path.display()))?;
+
+    Ok(Some(signing_key))
+}
+
+fn non_empty_option(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn non_empty_path(path: Option<PathBuf>) -> Option<PathBuf> {
+    path.filter(|path| !path.as_os_str().is_empty())
 }

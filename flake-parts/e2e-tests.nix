@@ -12,12 +12,26 @@
       signingSecret = "${stateDir}/cache.sec";
       signingPublic = "${stateDir}/cache.pub";
 
+      toml = pkgs.formats.toml { };
+
       mkCacheSubstituterTest =
         {
           name,
-          serviceEnvironment,
+          appConfig ? { },
           extraNodeConfig ? { },
         }:
+        let
+          baseAppConfig = {
+            server.bind_address = "127.0.0.1:8080";
+            database.path = "${stateDir}/cache.db";
+            auth.write_token = "test-token";
+            signing.aggregate_key_file = signingSecret;
+          };
+
+          cacheAppConfig = toml.generate "${name}-cache-app.toml" (
+            lib.recursiveUpdate baseAppConfig appConfig
+          );
+        in
         pkgs.testers.nixosTest {
           inherit name;
 
@@ -56,14 +70,6 @@
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
 
-                  environment = {
-                    CACHE_BIND_ADDRESS = "127.0.0.1:8080";
-                    CACHE_DB_PATH = "${stateDir}/cache.db";
-                    CACHE_WRITE_TOKEN = "test-token";
-                    CACHE_AGGREGATE_SIGNING_KEY_FILE = signingSecret;
-                  }
-                  // serviceEnvironment;
-
                   preStart = ''
                     set -euo pipefail
 
@@ -78,7 +84,7 @@
                   '';
 
                   serviceConfig = {
-                    ExecStart = lib.getExe cacheApp;
+                    ExecStart = "${lib.getExe cacheApp} --config ${cacheAppConfig}";
                     Restart = "on-failure";
                     StateDirectory = "cache";
                   };
@@ -158,9 +164,11 @@
         e2e-cache-substituter-fs = mkCacheSubstituterTest {
           name = "e2e-cache-substituter-fs";
 
-          serviceEnvironment = {
-            CACHE_WRITABLE_LOCAL_BACKEND = "fs";
-            CACHE_OBJECT_ROOT = "${stateDir}/objects";
+          appConfig = {
+            storage = {
+              object_root = "${stateDir}/objects";
+              write_backend = "fs";
+            };
           };
         };
       };

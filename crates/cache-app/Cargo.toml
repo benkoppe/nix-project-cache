@@ -16,6 +16,9 @@ axum.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+clap.workspace = true
+figment.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 cache-test-utils = { path = "../cache-test-utils" }
