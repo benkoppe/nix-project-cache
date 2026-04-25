@@ -21,6 +21,7 @@
         fileset = lib.fileset.unions [
           (craneLib.fileset.commonCargoSources unfilteredRoot)
           ../crates/cache-db/migrations
+          ../.sqlx
         ];
       };
 
@@ -48,16 +49,22 @@
         doCheck = false;
       };
 
+      mkWorkspacePackage =
+        pname:
+        craneLib.buildPackage (
+          cacheAppArgs
+          // {
+            inherit pname;
+            cargoExtraArgs = "-p ${pname}";
+          }
+        );
+
       packages = rec {
         default = cache-app;
 
-        cache-app = craneLib.buildPackage (
-          cacheAppArgs
-          // {
-            pname = "cache-app";
-            cargoExtraArgs = "-p cache-app";
-          }
-        );
+        cache-app = mkWorkspacePackage "cache-app";
+        cache-ctl = mkWorkspacePackage "cache-ctl";
+        cache-push = mkWorkspacePackage "cache-push";
       };
 
       checks = {
