@@ -2,5 +2,6 @@
 /dev
 
 # nix
+result
 .direnv
 .pre-commit-config.yaml
