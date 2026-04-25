@@ -1,5 +1,6 @@
 pub mod handlers;
 pub mod local_objects;
+pub mod object_provider;
 pub mod resolver;
 pub mod router;
 pub mod service;
@@ -7,7 +8,10 @@ pub mod signing_keys;
 pub mod state;
 pub mod upstreams;
 
-pub use local_objects::{DbBackedLocalObjectStore, ViewLocalObjectStore};
+pub use local_objects::DbBackedLocalObjectStore;
+pub use object_provider::{
+    CacheObjectProvider, DbBlobCacheObjectProvider, InMemoryCacheObjectProvider,
+};
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::read_router;
 pub use service::ReadService;
@@ -29,26 +33,26 @@ mod tests {
     use cache_core::narinfo::NarInfoRenderer;
     use cache_core::nix::StoreDir;
     use cache_store::blob::BlobMetadata;
-    use cache_store::local::InMemoryLocalObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
         EXAMPLE_PROJECT_SLUG, SamplePath, example_project, hello_path, sample_upstream,
     };
 
     use crate::{
-        InMemoryNarInfoResolver, ReadAppState, ReadService, StaticUpstreamSelector, read_router,
+        InMemoryCacheObjectProvider, InMemoryNarInfoResolver, ReadAppState, ReadService,
+        StaticUpstreamSelector, read_router,
     };
 
-    fn sample_local_object_store() -> InMemoryLocalObjectStore {
+    fn sample_object_provider() -> InMemoryCacheObjectProvider {
         let path = hello_path();
 
-        let mut store = InMemoryLocalObjectStore::new();
-        store.insert(
+        let mut provider = InMemoryCacheObjectProvider::new();
+        provider.insert(
             path.url(),
             BlobMetadata::new("application/octet-stream", Some(9), None, None),
             Bytes::from_static(b"local-nar"),
         );
-        store
+        provider
     }
 
     fn sample_state() -> ReadAppState {
@@ -62,7 +66,7 @@ mod tests {
 
         let read_service = ReadService::new(
             Arc::new(resolver),
-            Arc::new(sample_local_object_store()),
+            Arc::new(sample_object_provider()),
             Arc::new(InMemoryUpstreamCacheClient::new()),
             Arc::new(StaticUpstreamSelector::new()),
             NarInfoRenderer::new(StoreDir::default()),
@@ -96,7 +100,7 @@ mod tests {
 
         let read_service = ReadService::new(
             Arc::new(InMemoryNarInfoResolver::new()),
-            Arc::new(InMemoryLocalObjectStore::new()),
+            Arc::new(InMemoryCacheObjectProvider::new()),
             Arc::new(upstream_client),
             Arc::new(upstream_selector),
             NarInfoRenderer::new(StoreDir::default()),

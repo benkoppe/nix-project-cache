@@ -16,8 +16,8 @@ use cache_core::storage::LocalBackendName;
 use cache_db::SqliteDatabase;
 use cache_ingest::{GcService, IngestService};
 use cache_read::{
-    DbBackedLocalObjectStore, DbNarInfoResolver, DbProjectSigningKeys, DbUpstreamSelector,
-    ReadAppState, ReadService, read_router,
+    DbBackedLocalObjectStore, DbBlobCacheObjectProvider, DbNarInfoResolver, DbProjectSigningKeys,
+    DbUpstreamSelector, ReadAppState, ReadService, read_router,
 };
 use cache_store::local::LocalObjectBackendRegistry;
 use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
@@ -74,6 +74,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
 
     let local_objects = DbBackedLocalObjectStore::new(db.clone(), local_backends.clone());
+    let object_provider = DbBlobCacheObjectProvider::new(local_objects.clone());
     let upstream_selector = DbUpstreamSelector::new(db.clone());
 
     let project_signing_keys = key_encryption_key
@@ -82,7 +83,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
 
     let read_service = ReadService::new(
         Arc::new(DbNarInfoResolver::new(db.clone())),
-        Arc::new(local_objects.clone()),
+        Arc::new(object_provider.clone()),
         upstream_client.clone(),
         Arc::new(upstream_selector),
         renderer,

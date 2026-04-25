@@ -10,7 +10,7 @@ use cache_core::view::CacheView;
 use cache_store::blob::{BlobBytes, BlobMetadata};
 use cache_store::upstream::UpstreamCacheClient;
 
-use crate::local_objects::ViewLocalObjectStore;
+use crate::object_provider::CacheObjectProvider;
 use crate::resolver::NarInfoResolver;
 use crate::signing_keys::DbProjectSigningKeys;
 use crate::upstreams::UpstreamSelector;
@@ -18,7 +18,7 @@ use crate::upstreams::UpstreamSelector;
 #[derive(Clone)]
 pub struct ReadService {
     local_resolver: Arc<dyn NarInfoResolver>,
-    local_objects: Arc<dyn ViewLocalObjectStore>,
+    object_provider: Arc<dyn CacheObjectProvider>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
     upstream_selector: Arc<dyn UpstreamSelector>,
     renderer: NarInfoRenderer,
@@ -29,7 +29,7 @@ pub struct ReadService {
 impl ReadService {
     pub fn new(
         local_resolver: Arc<dyn NarInfoResolver>,
-        local_objects: Arc<dyn ViewLocalObjectStore>,
+        object_provider: Arc<dyn CacheObjectProvider>,
         upstream_client: Arc<dyn UpstreamCacheClient>,
         upstream_selector: Arc<dyn UpstreamSelector>,
         renderer: NarInfoRenderer,
@@ -38,7 +38,7 @@ impl ReadService {
     ) -> Self {
         Self {
             local_resolver,
-            local_objects,
+            object_provider,
             upstream_client,
             upstream_selector,
             renderer,
@@ -90,7 +90,7 @@ impl ReadService {
         view: &CacheView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
-        if let Some(result) = self.local_objects.get_visible(view, object_path).await? {
+        if let Some(result) = self.object_provider.get_object(view, object_path).await? {
             return Ok(Some(result));
         }
 

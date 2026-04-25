@@ -1,32 +1,11 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use cache_store::InMemoryLocalObjectStore;
 use tracing::warn;
 
 use cache_core::view::CacheView;
 use cache_db::SqliteDatabase;
 use cache_store::blob::{BlobBytes, BlobMetadata};
 use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore};
-
-#[async_trait]
-pub trait ViewLocalObjectStore: Send + Sync + 'static {
-    async fn get_visible(
-        &self,
-        view: &CacheView,
-        object_path: &str,
-    ) -> Result<Option<(BlobMetadata, BlobBytes)>>;
-}
-
-#[async_trait]
-impl ViewLocalObjectStore for InMemoryLocalObjectStore {
-    async fn get_visible(
-        &self,
-        _view: &CacheView,
-        object_path: &str,
-    ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
-        self.get(object_path).await
-    }
-}
 
 #[derive(Clone)]
 pub struct DbBackedLocalObjectStore {
@@ -66,9 +45,8 @@ impl DbBackedLocalObjectStore {
     }
 }
 
-#[async_trait]
-impl ViewLocalObjectStore for DbBackedLocalObjectStore {
-    async fn get_visible(
+impl DbBackedLocalObjectStore {
+    pub async fn get_visible(
         &self,
         view: &CacheView,
         object_path: &str,
