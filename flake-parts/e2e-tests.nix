@@ -12,13 +12,113 @@
       signingSecret = "${stateDir}/cache.sec";
       signingPublic = "${stateDir}/cache.pub";
 
+      s3Bucket = "nix-project-cache-test";
+      s3AccessKey = "minioadmin";
+      s3SecretKey = "minioadmin";
+      s3Endpoint = "http://127.0.0.1:9000";
+
       toml = pkgs.formats.toml { };
+
+      mkMinioNodeConfig =
+        {
+          bucket ? s3Bucket,
+          accessKey ? s3AccessKey,
+          secretKey ? s3SecretKey,
+          endpointHost ? "127.0.0.1",
+          port ? 9000,
+        }:
+        {
+          users.groups.minio-test = { };
+
+          users.users.minio-test = {
+            isSystemUser = true;
+            group = "minio-test";
+          };
+
+          systemd.tmpfiles.rules = [
+            "d /var/lib/minio 0750 minio-test minio-test -"
+            "d /var/lib/minio/data 0750 minio-test minio-test -"
+          ];
+
+          systemd.services = {
+            minio = {
+              description = "MinIO S3-compatible object storage";
+              after = [ "network.target" ];
+              wantedBy = [ "multi-user.target" ];
+
+              path = [
+                pkgs.getent
+              ];
+
+              environment = {
+                MINIO_ROOT_USER = accessKey;
+                MINIO_ROOT_PASSWORD = secretKey;
+              };
+
+              serviceConfig = {
+                ExecStart = "${lib.getExe pkgs.minio} server --address ${endpointHost}:${toString port} /var/lib/minio/data";
+                User = "minio-test";
+                Group = "minio-test";
+                Restart = "on-failure";
+              };
+            };
+
+            minio-setup = {
+              description = "Setup MinIO bucket";
+              after = [ "minio.service" ];
+              requires = [ "minio.service" ];
+              before = [ "cache-app.service" ];
+              wantedBy = [ "multi-user.target" ];
+
+              environment = {
+                S3_ENDPOINT_URL = "http://${endpointHost}:${toString port}";
+                AWS_ACCESS_KEY_ID = accessKey;
+                AWS_SECRET_ACCESS_KEY = secretKey;
+              };
+
+              path = [ pkgs.s5cmd ];
+
+              script = ''
+                set -euo pipefail
+
+                ready=0
+                for i in $(seq 60); do
+                  if s5cmd ls 2>/dev/null; then
+                    ready=1
+                    break
+                  fi
+
+                  echo "Waiting for MinIO to start... ($i/60)"
+                  sleep 2
+                done
+
+                if [ "$ready" -eq 0 ]; then
+                  echo "ERROR: MinIO did not become ready after 60 attempts" >&2
+                  exit 1
+                fi
+
+                s5cmd mb s3://${bucket} || true
+              '';
+
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+              };
+            };
+
+            cache-app = {
+              after = [ "minio-setup.service" ];
+              requires = [ "minio-setup.service" ];
+            };
+          };
+        };
 
       mkCacheSubstituterTest =
         {
           name,
           appConfig ? { },
           extraNodeConfig ? { },
+          extraTestScript ? "",
         }:
         let
           baseAppConfig = {
@@ -132,6 +232,8 @@
               f"{store_path}"
             )
 
+            ${extraTestScript}
+
             store_hash = store_path.split("/")[-1].split("-")[0]
 
             narinfo = machine.succeed(
@@ -170,6 +272,37 @@
               write_backend = "fs";
             };
           };
+        };
+
+        e2e-cache-substituter-s3 = mkCacheSubstituterTest {
+          name = "e2e-cache-substituter-s3";
+
+          appConfig = {
+            storage = {
+              write_backend = "s3";
+
+              s3 = {
+                endpoint = s3Endpoint;
+                bucket = s3Bucket;
+                region = "us-east-1";
+                access_key_id = s3AccessKey;
+                secret_access_key = s3SecretKey;
+                force_path_style = true;
+                prefix = "objects";
+              };
+            };
+          };
+
+          extraNodeConfig = mkMinioNodeConfig { };
+
+          extraTestScript = ''
+            machine.succeed(
+              "AWS_ACCESS_KEY_ID=${s3AccessKey} "
+              "AWS_SECRET_ACCESS_KEY=${s3SecretKey} "
+              "S3_ENDPOINT_URL=${s3Endpoint} "
+              "${lib.getExe pkgs.s5cmd} ls 's3://${s3Bucket}/objects/nar/*'"
+            )
+          '';
         };
       };
     in
