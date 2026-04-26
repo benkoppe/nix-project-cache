@@ -22,11 +22,7 @@ impl DbBackedObjectStore {
     async fn preferred_storage_id(&self, view: &CacheView) -> Result<StorageId> {
         match view {
             CacheView::Aggregate => Ok(self.catalog.default_storage_id().clone()),
-            CacheView::Project(project) => Ok(self
-                .db
-                .get_project_storage_id(project)
-                .await?
-                .unwrap_or_else(|| self.catalog.default_storage_id().clone())),
+            CacheView::Project(project) => self.db.get_project_storage_id(project).await,
         }
     }
 

@@ -72,7 +72,10 @@ impl StorageCatalog {
                 self.storage(storage_id)?;
                 Ok(storage_id.clone())
             }
-            None => Ok(self.default_storage_id.clone()),
+            None if self.is_single_backend() => Ok(self.default_storage_id.clone()),
+            None => Err(anyhow!(
+                "storage id is required when multiple storage backends are configured"
+            )),
         }
     }
 }

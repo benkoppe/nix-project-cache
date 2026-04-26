@@ -13,6 +13,6 @@ pub struct ProjectInfo {
     pub slug: String,
     pub display_name: String,
     pub public: bool,
-    pub storage_id: Option<String>,
+    pub storage_id: String,
     pub created_at: String,
 }

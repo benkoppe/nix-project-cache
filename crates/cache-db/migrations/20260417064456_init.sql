@@ -3,7 +3,7 @@ CREATE TABLE projects (
     slug TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     public INTEGER NOT NULL DEFAULT 1,
-    storage_id TEXT NULL,
+    storage_id TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

@@ -4,6 +4,7 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use cache_core::project::ProjectSlug;
+use cache_core::storage::StorageId;
 use cache_store::upstream::UpstreamCache;
 
 #[derive(Debug, Clone)]
@@ -12,7 +13,7 @@ pub struct ProjectLookupRow {
     pub slug: String,
     pub display_name: String,
     pub public: i64,
-    pub storage_id: Option<String>,
+    pub storage_id: String,
     pub created_at: String,
 }
 
@@ -22,7 +23,7 @@ pub struct ProjectRecord {
     pub slug: ProjectSlug,
     pub display_name: String,
     pub public: bool,
-    pub storage_id: Option<cache_core::storage::StorageId>,
+    pub storage_id: StorageId,
     pub created_at: OffsetDateTime,
 }
 
@@ -34,10 +35,7 @@ impl ProjectLookupRow {
                 .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.slug))?,
             display_name: self.display_name,
             public: self.public != 0,
-            storage_id: self
-                .storage_id
-                .map(cache_core::storage::StorageId::new)
-                .transpose()
+            storage_id: StorageId::new(self.storage_id)
                 .map_err(anyhow::Error::new)
                 .context("parsing project storage_id")?,
             created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)

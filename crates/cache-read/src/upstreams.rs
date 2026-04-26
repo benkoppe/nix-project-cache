@@ -80,6 +80,7 @@ impl UpstreamSelector for DbUpstreamSelector {
 
 #[cfg(test)]
 mod tests {
+    use cache_core::storage::StorageId;
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -123,7 +124,7 @@ mod tests {
             10,
         );
 
-        db.insert_project(&project, EXAMPLE_PROJECT_NAME, true)
+        db.insert_project(&project, EXAMPLE_PROJECT_NAME, true, &StorageId::main())
             .await
             .unwrap();
         db.insert_upstream_cache(&upstream, true).await.unwrap();

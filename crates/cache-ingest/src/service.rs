@@ -194,7 +194,7 @@ impl IngestService {
             let _ = storage.delete(object_path).await;
         }
 
-        Ok(())
+        persist_result
     }
 
     pub async fn finalize_build(
@@ -286,11 +286,7 @@ impl IngestService {
     }
 
     async fn storage_id_for_project(&self, project_slug: &ProjectSlug) -> Result<StorageId> {
-        Ok(self
-            .db
-            .get_project_storage_id(project_slug)
-            .await?
-            .unwrap_or_else(|| self.storage_catalog.default_storage_id().clone()))
+        self.db.get_project_storage_id(project_slug).await
     }
 }
 

@@ -391,7 +391,7 @@ pub async fn list_projects(
                     .into_iter()
                     .map(|project| ProjectInfo {
                         slug: project.slug.as_str().to_owned(),
-                        storage_id: project.storage_id.map(|id| id.as_str().to_owned()),
+                        storage_id: project.storage_id.as_str().to_owned(),
                         display_name: project.display_name,
                         public: project.public,
                         created_at: project.created_at.to_string(),
@@ -441,20 +441,17 @@ pub async fn upsert_project(
                 return StatusCode::BAD_REQUEST.into_response();
             }
 
-            Some(storage_id)
+            storage_id
         }
-        None if state.storage_catalog.is_single_backend() => None,
-        None => return StatusCode::BAD_REQUEST.into_response(),
+        None => match state.storage_catalog.resolve_optional_storage_id(None) {
+            Ok(storage_id) => storage_id,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
     };
 
     match state
         .db
-        .insert_project_with_storage(
-            &project,
-            &request.display_name,
-            request.public,
-            storage_id.as_ref(),
-        )
+        .insert_project(&project, &request.display_name, request.public, &storage_id)
         .await
     {
         Ok(()) => {

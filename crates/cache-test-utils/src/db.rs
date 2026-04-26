@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tempfile::TempDir;
 
-use cache_core::project::ProjectSlug;
+use cache_core::{project::ProjectSlug, storage::StorageId};
 use cache_db::SqliteDatabase;
 
 use crate::fixtures::{EXAMPLE_PROJECT_NAME, example_project};
@@ -28,7 +28,7 @@ impl TestDatabase {
     pub async fn insert_example_project(&self) -> Result<ProjectSlug> {
         let project = example_project();
         self.db
-            .insert_project(&project, EXAMPLE_PROJECT_NAME, true)
+            .insert_project(&project, EXAMPLE_PROJECT_NAME, true, &StorageId::main())
             .await?;
         Ok(project)
     }

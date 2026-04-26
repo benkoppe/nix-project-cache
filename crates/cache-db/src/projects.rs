@@ -13,22 +13,12 @@ impl SqliteDatabase {
         slug: &ProjectSlug,
         display_name: &str,
         public: bool,
-    ) -> Result<()> {
-        self.insert_project_with_storage(slug, display_name, public, None)
-            .await
-    }
-
-    pub async fn insert_project_with_storage(
-        &self,
-        slug: &ProjectSlug,
-        display_name: &str,
-        public: bool,
-        storage_id: Option<&StorageId>,
+        storage_id: &StorageId,
     ) -> Result<()> {
         let id = Uuid::now_v7().to_string();
         let slug_text = slug.as_str();
         let public_int = if public { 1_i64 } else { 0_i64 };
-        let storage_id_text = storage_id.map(StorageId::as_str);
+        let storage_id_text = storage_id.as_str();
 
         sqlx::query!(
             r#"
@@ -102,7 +92,7 @@ impl SqliteDatabase {
             .collect()
     }
 
-    pub async fn get_project_storage_id(&self, slug: &ProjectSlug) -> Result<Option<StorageId>> {
+    pub async fn get_project_storage_id(&self, slug: &ProjectSlug) -> Result<StorageId> {
         let slug_text = slug.as_str();
 
         let storage_id = sqlx::query_scalar!(
@@ -117,13 +107,34 @@ impl SqliteDatabase {
         .fetch_optional(&self.pool)
         .await
         .context("getting project storage id")?
-        .flatten();
+        .ok_or_else(|| anyhow!("project {} not found", slug_text))?;
 
-        storage_id
-            .map(StorageId::new)
-            .transpose()
+        StorageId::new(storage_id)
             .map_err(anyhow::Error::new)
             .context("parsing project storage_id")
+    }
+
+    pub async fn list_project_storage_ids(&self) -> Result<Vec<(ProjectSlug, StorageId)>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT slug, storage_id
+            FROM projects
+            ORDER BY slug ASC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing project storage ids")?;
+        rows.into_iter()
+            .map(|row| {
+                let project = ProjectSlug::parse(&row.slug)
+                    .map_err(|_| anyhow!("invalid project slug {}", row.slug))?;
+                let storage_id = StorageId::new(row.storage_id)
+                    .map_err(anyhow::Error::new)
+                    .context("parsing project storage_id")?;
+                Ok((project, storage_id))
+            })
+            .collect()
     }
 
     pub(crate) async fn project_id_by_slug(&self, slug: &ProjectSlug) -> Result<String> {

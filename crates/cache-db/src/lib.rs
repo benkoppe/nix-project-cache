@@ -64,7 +64,7 @@ mod tests {
         let narinfo = sample_narinfo();
         let hash = sample_hash();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
         db.upsert_path_info(&narinfo).await.unwrap();
@@ -94,10 +94,10 @@ mod tests {
         let narinfo = sample_narinfo();
         let hash = sample_hash();
 
-        db.insert_project(&public_project, "Public", true)
+        db.insert_project(&public_project, "Public", true, &StorageId::main())
             .await
             .unwrap();
-        db.insert_project(&private_project, "Private", false)
+        db.insert_project(&private_project, "Private", false, &StorageId::main())
             .await
             .unwrap();
         db.upsert_path_info(&narinfo).await.unwrap();
@@ -133,7 +133,7 @@ mod tests {
             10,
         );
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
         db.insert_upstream_cache(&upstream, true).await.unwrap();
@@ -178,7 +178,7 @@ mod tests {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
 
@@ -200,7 +200,7 @@ mod tests {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
 
@@ -261,7 +261,7 @@ mod tests {
         let narinfo = sample_narinfo();
         let hash = sample_hash();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
         db.upsert_path_info(&narinfo).await.unwrap();
@@ -348,7 +348,7 @@ mod tests {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
 
@@ -395,16 +395,16 @@ mod tests {
         let project = ProjectSlug::parse("example_repo").unwrap();
         let storage_id = StorageId::new("large").unwrap();
 
-        db.insert_project_with_storage(&project, "Example Repo", true, Some(&storage_id))
+        db.insert_project(&project, "Example Repo", true, &storage_id)
             .await
             .unwrap();
 
         let loaded = db.get_project_by_slug(&project).await.unwrap().unwrap();
 
-        assert_eq!(loaded.storage_id, Some(storage_id.clone()));
+        assert_eq!(loaded.storage_id, storage_id.clone());
         assert_eq!(
             db.get_project_storage_id(&project).await.unwrap(),
-            Some(storage_id)
+            storage_id
         );
     }
 
@@ -413,7 +413,7 @@ mod tests {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
-        db.insert_project(&project, "Example Repo", true)
+        db.insert_project(&project, "Example Repo", true, &StorageId::main())
             .await
             .unwrap();
 

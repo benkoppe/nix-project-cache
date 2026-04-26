@@ -684,7 +684,7 @@ mod tests {
             StatusCode::OK,
             Json(vec![ProjectInfo {
                 slug: EXAMPLE_PROJECT_SLUG.to_owned(),
-                storage_id: None,
+                storage_id: "main".to_owned(),
                 display_name: EXAMPLE_PROJECT_NAME.to_owned(),
                 public: true,
                 created_at: "2026-04-20T00:00:00Z".to_owned(),

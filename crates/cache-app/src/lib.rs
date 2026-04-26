@@ -47,6 +47,12 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
 
     let authorizer = build_default_authorizer(config)?;
 
+    let storage_catalog = config.storage.catalog()?;
+
+    if config.server.mode == AppMode::ReadWrite {
+        validate_project_storage_ids(&db, &storage_catalog).await?;
+    }
+
     Ok(build_app_with_authorizer(
         AppParts {
             db,
@@ -54,7 +60,7 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
             store_dir: config.nix.store_dir.clone(),
             aggregate_signing_key: config.signing.aggregate_signing_key.clone(),
             key_encryption_key: config.signing.project_key_encryption_key.clone(),
-            storage_catalog: config.storage.catalog()?,
+            storage_catalog,
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         authorizer,
@@ -141,4 +147,21 @@ fn build_default_authorizer(config: &AppConfig) -> anyhow::Result<Arc<dyn Author
     }
 
     Ok(Arc::new(chain))
+}
+
+async fn validate_project_storage_ids(
+    db: &SqliteDatabase,
+    storage_catalog: &StorageCatalog,
+) -> anyhow::Result<()> {
+    for (project, storage_id) in db.list_project_storage_ids().await? {
+        storage_catalog.storage(&storage_id).with_context(|| {
+            format!(
+                "project {} references unavailable storage backend {}",
+                project.as_str(),
+                storage_id
+            )
+        })?;
+    }
+
+    Ok(())
 }
