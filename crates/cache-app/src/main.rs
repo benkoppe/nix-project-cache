@@ -34,8 +34,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         db_path = %config.database.path.display(),
-        local_object_root = %config.storage.object_root.display(),
-        writable_backend = ?config.storage.writable_backend.as_ref().map(|name| name.as_str()),
+        mode = ?config.server.mode,
+        default_storage = %config.storage.default_storage_id,
+        storage_backends = config.storage.backends.len(),
         address = %listener.local_addr()?,
         "starting cache server"
     );

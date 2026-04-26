@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                storage_id,\n                content_type,\n                content_length,\n                etag,\n                last_modified\n            FROM storage_objects\n            WHERE object_path = ?\n              AND deleted_at IS NULL\n            ORDER BY storage_id ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "storage_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "content_type",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "content_length",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "etag",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_modified",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5f71d41cbf4058ba0f2c0b18e24c479ae6dd95d6a354e26a63e8e12bc266d489"
+}

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
@@ -10,61 +9,31 @@ use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWriteExt as _};
 use uuid::Uuid;
 
-use cache_core::storage::LocalBackendName;
-
 use crate::blob::{BlobBytes, BlobMetadata};
 
-pub type LocalUploadReader = Pin<Box<dyn AsyncRead + Send>>;
+pub type UploadReader = Pin<Box<dyn AsyncRead + Send>>;
 
 #[async_trait]
-pub trait LocalObjectStore: Send + Sync + 'static {
+pub trait CacheStorage: Send + Sync + 'static {
+    async fn contains(&self, object_path: &str) -> Result<bool>;
+    async fn get_bytes(&self, object_path: &str) -> Result<Option<BlobBytes>>;
+    async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> Result<()>;
+    async fn put_stream(&self, object_path: &str, reader: UploadReader) -> Result<u64>;
+    async fn delete(&self, object_path: &str) -> Result<()>;
+}
+
+#[async_trait]
+pub trait ObjectStore: Send + Sync + 'static {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>>;
     async fn get(&self, object_path: &str) -> Result<Option<(BlobMetadata, BlobBytes)>>;
 }
 
-#[async_trait]
-pub trait LocalObjectBackend: Send + Sync + 'static {
-    async fn contains(&self, storage_key: &str) -> Result<bool>;
-    async fn get_bytes(&self, storage_key: &str) -> Result<Option<BlobBytes>>;
-    async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()>;
-    async fn put_stream(&self, storage_key: &str, reader: LocalUploadReader) -> Result<u64>;
-    async fn delete(&self, storage_key: &str) -> Result<()>;
-}
-
-#[derive(Clone, Default)]
-pub struct LocalObjectBackendRegistry {
-    backends: HashMap<LocalBackendName, Arc<dyn LocalObjectBackend>>,
-}
-
-impl LocalObjectBackendRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(
-        &mut self,
-        backend_name: LocalBackendName,
-        backend: Arc<dyn LocalObjectBackend>,
-    ) -> Option<Arc<dyn LocalObjectBackend>> {
-        self.backends.insert(backend_name, backend)
-    }
-
-    pub fn get(&self, backend_name: &LocalBackendName) -> Option<Arc<dyn LocalObjectBackend>> {
-        self.backends.get(backend_name).cloned()
-    }
-
-    pub fn require(&self, backend_name: &LocalBackendName) -> Result<Arc<dyn LocalObjectBackend>> {
-        self.get(backend_name)
-            .ok_or_else(|| anyhow!("no local object backend registered for {}", backend_name))
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct FilesystemLocalObjectBackend {
+pub struct FilesystemStorage {
     root: PathBuf,
 }
 
-impl FilesystemLocalObjectBackend {
+impl FilesystemStorage {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
@@ -73,8 +42,8 @@ impl FilesystemLocalObjectBackend {
         &self.root
     }
 
-    fn resolve_storage_key(&self, storage_key: &str) -> Result<PathBuf> {
-        let key_path = Path::new(storage_key);
+    fn resolve_object_path(&self, object_path: &str) -> Result<PathBuf> {
+        let key_path = Path::new(object_path);
         let mut resolved = self.root.clone();
 
         for component in key_path.components() {
@@ -82,7 +51,7 @@ impl FilesystemLocalObjectBackend {
                 Component::Normal(segment) => resolved.push(segment),
                 Component::CurDir => {}
                 Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                    return Err(anyhow!("invalid storage key {storage_key}"));
+                    return Err(anyhow!("invalid object path {object_path}"));
                 }
             }
         }
@@ -99,11 +68,11 @@ impl FilesystemLocalObjectBackend {
         final_path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::now_v7()))
     }
 
-    async fn prepare_write_path(&self, storage_key: &str) -> Result<(PathBuf, PathBuf)> {
-        let final_path = self.resolve_storage_key(storage_key)?;
+    async fn prepare_write_path(&self, object_path: &str) -> Result<(PathBuf, PathBuf)> {
+        let final_path = self.resolve_object_path(object_path)?;
         let parent = final_path
             .parent()
-            .ok_or_else(|| anyhow!("storage key {} resolved without parent", storage_key))?;
+            .ok_or_else(|| anyhow!("object path {} resolved without parent", object_path))?;
 
         fs::create_dir_all(parent)
             .await
@@ -120,9 +89,9 @@ impl FilesystemLocalObjectBackend {
 }
 
 #[async_trait]
-impl LocalObjectBackend for FilesystemLocalObjectBackend {
-    async fn contains(&self, storage_key: &str) -> Result<bool> {
-        let path = self.resolve_storage_key(storage_key)?;
+impl CacheStorage for FilesystemStorage {
+    async fn contains(&self, object_path: &str) -> Result<bool> {
+        let path = self.resolve_object_path(object_path)?;
 
         match fs::metadata(&path).await {
             Ok(metadata) => Ok(metadata.is_file()),
@@ -132,8 +101,8 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
         }
     }
 
-    async fn get_bytes(&self, storage_key: &str) -> Result<Option<BlobBytes>> {
-        let path = self.resolve_storage_key(storage_key)?;
+    async fn get_bytes(&self, object_path: &str) -> Result<Option<BlobBytes>> {
+        let path = self.resolve_object_path(object_path)?;
 
         match fs::read(&path).await {
             Ok(bytes) => Ok(Some(BlobBytes::from(bytes))),
@@ -144,8 +113,8 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
         }
     }
 
-    async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()> {
-        let (final_path, temp_path) = self.prepare_write_path(storage_key).await?;
+    async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> Result<()> {
+        let (final_path, temp_path) = self.prepare_write_path(object_path).await?;
 
         let result = async {
             fs::write(&temp_path, &bytes)
@@ -171,8 +140,8 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
         result
     }
 
-    async fn put_stream(&self, storage_key: &str, mut reader: LocalUploadReader) -> Result<u64> {
-        let (final_path, temp_path) = self.prepare_write_path(storage_key).await?;
+    async fn put_stream(&self, object_path: &str, mut reader: UploadReader) -> Result<u64> {
+        let (final_path, temp_path) = self.prepare_write_path(object_path).await?;
 
         let result = async {
             let mut temp_file = fs::File::create(&temp_path)
@@ -213,8 +182,8 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
         result
     }
 
-    async fn delete(&self, storage_key: &str) -> Result<()> {
-        let path = self.resolve_storage_key(storage_key)?;
+    async fn delete(&self, object_path: &str) -> Result<()> {
+        let path = self.resolve_object_path(object_path)?;
 
         match fs::remove_file(&path).await {
             Ok(()) => Ok(()),
@@ -227,11 +196,11 @@ impl LocalObjectBackend for FilesystemLocalObjectBackend {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct InMemoryLocalObjectStore {
+pub struct InMemoryObjectStore {
     objects: HashMap<String, (BlobMetadata, BlobBytes)>,
 }
 
-impl InMemoryLocalObjectStore {
+impl InMemoryObjectStore {
     pub fn new() -> Self {
         Self::default()
     }
@@ -247,7 +216,7 @@ impl InMemoryLocalObjectStore {
 }
 
 #[async_trait]
-impl LocalObjectStore for InMemoryLocalObjectStore {
+impl ObjectStore for InMemoryObjectStore {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
         Ok(self
             .objects
@@ -265,11 +234,9 @@ mod tests {
     use tempfile::tempdir;
     use tokio::io::AsyncWriteExt as _;
 
-    use cache_core::storage::LocalBackendName;
-
     use super::*;
 
-    fn stream_reader(bytes: &'static [u8]) -> LocalUploadReader {
+    fn stream_reader(bytes: &'static [u8]) -> UploadReader {
         let (mut writer, reader) = tokio::io::duplex(bytes.len().max(1));
 
         tokio::spawn(async move {
@@ -281,14 +248,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_backend_reads_existing_bytes() {
+    async fn filesystem_storage_reads_existing_bytes() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
         let path = temp_dir.path().join("objects").join("nar").join("test.nar");
         fs::create_dir_all(path.parent().unwrap()).await.unwrap();
         fs::write(&path, b"hello world").await.unwrap();
 
-        let bytes = backend
+        let bytes = storage
             .get_bytes("objects/nar/test.nar")
             .await
             .unwrap()
@@ -298,39 +265,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_backend_contains_existing_object() {
+    async fn filesystem_storage_contains_existing_object() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
         let path = temp_dir.path().join("objects").join("nar").join("test.nar");
         fs::create_dir_all(path.parent().unwrap()).await.unwrap();
         fs::write(&path, b"hello world").await.unwrap();
 
-        assert!(backend.contains("objects/nar/test.nar").await.unwrap());
+        assert!(storage.contains("objects/nar/test.nar").await.unwrap());
     }
 
     #[tokio::test]
-    async fn filesystem_backend_rejects_parent_dir_segments() {
+    async fn filesystem_storage_rejects_parent_dir_segments() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
 
-        let result = backend.get_bytes("../escape").await;
+        let result = storage.get_bytes("../escape").await;
 
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn filesystem_backend_put_bytes_writes_and_reads_back() {
+    async fn filesystem_storage_put_bytes_writes_and_reads_back() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
 
-        backend
+        storage
             .put_bytes(
                 "objects/nar/test.nar",
                 BlobBytes::from_static(b"hello world"),
             )
             .await
             .unwrap();
-        let bytes = backend
+        let bytes = storage
             .get_bytes("objects/nar/test.nar")
             .await
             .unwrap()
@@ -340,11 +307,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_backend_put_stream_writes_and_reads_back() {
+    async fn filesystem_storage_put_stream_writes_and_reads_back() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
 
-        let written = backend
+        let written = storage
             .put_stream(
                 "objects/nar/test.nar",
                 stream_reader(b"hello streamed world"),
@@ -352,7 +319,7 @@ mod tests {
             .await
             .unwrap();
 
-        let bytes = backend
+        let bytes = storage
             .get_bytes("objects/nar/test.nar")
             .await
             .unwrap()
@@ -363,41 +330,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_backend_put_bytes_overwrites_existing_content() {
+    async fn filesystem_storage_put_bytes_overwrites_existing_content() {
         let temp_dir = tempdir().unwrap();
-        let backend = FilesystemLocalObjectBackend::new(temp_dir.path());
+        let storage = FilesystemStorage::new(temp_dir.path());
 
-        backend
+        storage
             .put_bytes("objects/nar/test.nar", BlobBytes::from_static(b"old"))
             .await
             .unwrap();
-        backend
+        storage
             .put_bytes("objects/nar/test.nar", BlobBytes::from_static(b"new"))
             .await
             .unwrap();
 
-        let bytes = backend
+        let bytes = storage
             .get_bytes("objects/nar/test.nar")
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(bytes, BlobBytes::from_static(b"new"));
-    }
-
-    #[tokio::test]
-    async fn backend_registry_require_returns_registered_backend() {
-        let temp_dir = tempdir().unwrap();
-        let backend = std::sync::Arc::new(FilesystemLocalObjectBackend::new(temp_dir.path()));
-        let mut registry = LocalObjectBackendRegistry::new();
-
-        registry.register(LocalBackendName::fs(), backend);
-
-        assert!(registry.require(&LocalBackendName::fs()).is_ok());
-        assert!(
-            registry
-                .require(&LocalBackendName::new("missing").unwrap())
-                .is_err()
-        );
     }
 }

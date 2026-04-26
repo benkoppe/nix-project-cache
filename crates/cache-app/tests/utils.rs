@@ -3,16 +3,15 @@ use std::sync::Arc;
 use anyhow::Result;
 use tempfile::TempDir;
 
-use cache_app::{AppParts, build_app_with_parts};
+use cache_app::{AppMode, AppParts, build_app_with_parts};
 use cache_client::CacheClient;
 use cache_core::nix::StoreDir;
-use cache_core::storage::LocalBackendName;
 use cache_db::SqliteDatabase;
 use cache_store::upstream::{
     InMemoryUpstreamCacheClient, ReqwestUpstreamCacheClient, UpstreamCacheClient,
 };
 use cache_test_utils::{
-    TestDatabase, TestServer, filesystem_backends_in, fixtures::test_signing_key,
+    TestDatabase, TestServer, filesystem_storage_in, fixtures::test_signing_key,
 };
 
 pub const WRITE_TOKEN: &str = "secret-token";
@@ -49,11 +48,11 @@ impl TestApp {
         let app = build_app_with_parts(
             AppParts {
                 db,
+                mode: AppMode::ReadWrite,
                 store_dir: StoreDir::default(),
                 aggregate_signing_key: Some(test_signing_key()),
                 key_encryption_key: None,
-                local_backends: filesystem_backends_in(&temp_dir),
-                writable_local_backend: Some(LocalBackendName::fs()),
+                storage_catalog: filesystem_storage_in(&temp_dir),
                 upstream_client,
             },
             Some(WRITE_TOKEN.to_owned()),

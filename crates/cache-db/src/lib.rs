@@ -17,7 +17,7 @@ pub use models::{
     ProjectOidcIdentityRecord, ProjectRecord, ProjectRetentionPolicyRecord,
     ProjectRetentionRuleRecord, ProjectSigningKeyRecord, UpstreamCacheRecord,
 };
-pub use objects::LocalObjectRecord;
+pub use objects::StorageObjectRecord;
 pub use pool::SqliteDatabase;
 pub use retention::default_retention_rules;
 
@@ -28,7 +28,7 @@ mod tests {
     use cache_core::narinfo::NarInfo;
     use cache_core::nix::{NixHash, StorePathHash};
     use cache_core::project::ProjectSlug;
-    use cache_core::storage::{LocalBackendName, PathObjectKind};
+    use cache_core::storage::{PathObjectKind, StorageId};
     use cache_store::blob::BlobMetadata;
     use cache_store::upstream::UpstreamCache;
 
@@ -154,31 +154,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_object_round_trips() {
+    async fn storage_object_round_trips() {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
 
+        let storage_id = StorageId::main();
+        let object_path = "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst";
         let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
-        let backend_name = LocalBackendName::fs();
 
-        db.upsert_local_object(
-            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-            &metadata,
-            &backend_name,
-            "objects/020a",
-        )
-        .await
-        .unwrap();
-
-        let loaded = db
-            .get_local_object("nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst")
+        db.upsert_storage_object(&storage_id, object_path, &metadata)
             .await
-            .unwrap()
             .unwrap();
 
-        assert_eq!(loaded.metadata.content_type, "application/octet-stream");
-        assert_eq!(loaded.metadata.content_length, Some(9));
-        assert_eq!(loaded.storage_backend, backend_name);
-        assert_eq!(loaded.storage_key, "objects/020a");
+        let loaded = db.list_storage_objects(object_path).await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].storage_id, storage_id);
+        assert_eq!(loaded[0].metadata.content_type, "application/octet-stream");
+        assert_eq!(loaded[0].metadata.content_length, Some(9));
     }
 
     #[tokio::test]
@@ -249,32 +241,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_path_object_succeeds_for_existing_path_and_object() {
+    async fn link_path_object_succeeds_for_existing_path() {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
         let narinfo = sample_narinfo();
         let hash = sample_hash();
+        let object_path = "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst";
 
         db.upsert_path_info(&narinfo).await.unwrap();
 
-        let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
-        let backend_name = LocalBackendName::fs();
-
-        db.upsert_local_object(
-            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-            &metadata,
-            &backend_name,
-            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-        )
-        .await
-        .unwrap();
-
-        db.link_path_object(
-            &hash,
-            "nar/020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz.nar.zst",
-            PathObjectKind::Nar,
-        )
-        .await
-        .unwrap();
+        db.link_path_object(&hash, object_path, PathObjectKind::Nar)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -316,47 +293,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_local_object_clears_tombstones() {
+    async fn upsert_storage_object_clears_tombstones() {
         let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+
+        let storage_id = StorageId::main();
+        let storage_id_str = storage_id.as_str();
+        let object_path = "nar/test.nar.zst";
         let metadata = BlobMetadata::new("application/octet-stream", Some(9), None, None);
 
-        db.upsert_local_object(
-            "nar/test.nar.zst",
-            &metadata,
-            &LocalBackendName::fs(),
-            "nar/test.nar.zst",
-        )
-        .await
-        .unwrap();
+        db.upsert_storage_object(&storage_id, object_path, &metadata)
+            .await
+            .unwrap();
 
         sqlx::query!(
             r#"
-            UPDATE local_objects
+            UPDATE storage_objects
             SET
                 deleted_at = '2026-04-20T00:00:00.000Z',
                 first_deleted_at = '2026-04-20T00:00:00.000Z'
-            WHERE object_path = 'nar/test.nar.zst'
-            "#
+            WHERE storage_id = ?
+              AND object_path = ?
+        "#,
+            storage_id_str,
+            object_path,
         )
         .execute(db.pool())
         .await
         .unwrap();
 
-        db.upsert_local_object(
-            "nar/test.nar.zst",
-            &metadata,
-            &LocalBackendName::fs(),
-            "nar/test.nar.zst",
-        )
-        .await
-        .unwrap();
+        db.upsert_storage_object(&storage_id, object_path, &metadata)
+            .await
+            .unwrap();
 
         let row = sqlx::query!(
             r#"
             SELECT deleted_at, first_deleted_at
-            FROM local_objects
-            WHERE object_path = 'nar/test.nar.zst'
-            "#
+            FROM storage_objects
+            WHERE storage_id = ?
+              AND object_path = ?
+        "#,
+            storage_id_str,
+            object_path,
         )
         .fetch_one(db.pool())
         .await
@@ -409,6 +386,26 @@ mod tests {
 
         let reset_policy = db.get_project_retention_policy(&project).await.unwrap();
         assert!(reset_policy.inherited_default);
+    }
+
+    #[tokio::test]
+    async fn project_storage_id_round_trips() {
+        let (db, _tmp) = SqliteDatabase::open_temp_for_tests().await.unwrap();
+
+        let project = ProjectSlug::parse("example_repo").unwrap();
+        let storage_id = StorageId::new("large").unwrap();
+
+        db.insert_project_with_storage(&project, "Example Repo", true, Some(&storage_id))
+            .await
+            .unwrap();
+
+        let loaded = db.get_project_by_slug(&project).await.unwrap().unwrap();
+
+        assert_eq!(loaded.storage_id, Some(storage_id.clone()));
+        assert_eq!(
+            db.get_project_storage_id(&project).await.unwrap(),
+            Some(storage_id)
+        );
     }
 
     #[tokio::test]

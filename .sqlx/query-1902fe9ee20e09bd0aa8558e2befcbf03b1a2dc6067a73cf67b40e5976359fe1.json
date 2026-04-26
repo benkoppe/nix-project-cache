@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                DELETE FROM storage_objects\n                WHERE storage_id = ?\n                  AND object_path = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1902fe9ee20e09bd0aa8558e2befcbf03b1a2dc6067a73cf67b40e5976359fe1"
+}

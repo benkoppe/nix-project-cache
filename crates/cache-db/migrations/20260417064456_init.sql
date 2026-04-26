@@ -3,6 +3,7 @@ CREATE TABLE projects (
     slug TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     public INTEGER NOT NULL DEFAULT 1,
+    storage_id TEXT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -51,17 +52,17 @@ CREATE TABLE path_signatures (
     FOREIGN KEY (store_path_hash) REFERENCES path_infos(store_path_hash) ON DELETE CASCADE
 );
 
-CREATE TABLE local_objects (
-    object_path TEXT NOT NULL PRIMARY KEY,
+CREATE TABLE storage_objects (
+    storage_id TEXT NOT NULL,
+    object_path TEXT NOT NULL,
     content_type TEXT NOT NULL,
     content_length INTEGER NULL,
     etag TEXT NULL,
     last_modified TEXT NULL,
-    storage_backend TEXT NOT NULL,
-    storage_key TEXT NOT NULL,
     deleted_at TEXT NULL,
     first_deleted_at TEXT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (storage_id, object_path)
 );
 
 CREATE INDEX idx_projects_slug ON projects(slug);
@@ -69,4 +70,5 @@ CREATE INDEX idx_project_upstreams_upstream_id ON project_upstreams(upstream_id)
 CREATE INDEX idx_path_references_store_path_hash ON path_references(store_path_hash);
 CREATE INDEX idx_path_signatures_store_path_hash ON path_signatures(store_path_hash);
 CREATE INDEX idx_upstream_caches_enabled_priority ON upstream_caches(enabled, priority);
-CREATE INDEX idx_local_objects_deleted_at ON local_objects(deleted_at, first_deleted_at);
+CREATE INDEX idx_storage_objects_object_path ON storage_objects(object_path);
+CREATE INDEX idx_storage_objects_deleted_at ON storage_objects(deleted_at, first_deleted_at);

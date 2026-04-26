@@ -1,14 +1,13 @@
 pub mod blob;
+pub mod catalog;
 pub mod local;
 pub mod s3;
 pub mod upstream;
 
 pub use blob::{BlobBytes, BlobMetadata};
-pub use local::{
-    FilesystemLocalObjectBackend, InMemoryLocalObjectStore, LocalObjectBackend,
-    LocalObjectBackendRegistry, LocalObjectStore, LocalUploadReader,
-};
-pub use s3::{S3LocalObjectBackend, S3LocalObjectBackendConfig};
+pub use catalog::StorageCatalog;
+pub use local::{CacheStorage, FilesystemStorage, InMemoryObjectStore, ObjectStore, UploadReader};
+pub use s3::{S3Storage, S3StorageConfig};
 pub use upstream::{
     InMemoryUpstreamCacheClient, ReqwestUpstreamCacheClient, UpstreamCache, UpstreamCacheClient,
 };

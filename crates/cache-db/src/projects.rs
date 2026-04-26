@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result, anyhow};
 use uuid::Uuid;
 
 use cache_core::project::ProjectSlug;
+use cache_core::storage::StorageId;
 
 use crate::models::{ProjectLookupRow, ProjectRecord};
 use crate::pool::SqliteDatabase;
@@ -13,22 +14,36 @@ impl SqliteDatabase {
         display_name: &str,
         public: bool,
     ) -> Result<()> {
+        self.insert_project_with_storage(slug, display_name, public, None)
+            .await
+    }
+
+    pub async fn insert_project_with_storage(
+        &self,
+        slug: &ProjectSlug,
+        display_name: &str,
+        public: bool,
+        storage_id: Option<&StorageId>,
+    ) -> Result<()> {
         let id = Uuid::now_v7().to_string();
         let slug_text = slug.as_str();
         let public_int = if public { 1_i64 } else { 0_i64 };
+        let storage_id_text = storage_id.map(StorageId::as_str);
 
         sqlx::query!(
             r#"
-            INSERT INTO projects (id, slug, display_name, public)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO projects (id, slug, display_name, public, storage_id)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(slug) DO UPDATE SET
                 display_name = excluded.display_name,
-                public = excluded.public
+                public = excluded.public,
+                storage_id = excluded.storage_id
             "#,
             id,
             slug_text,
             display_name,
             public_int,
+            storage_id_text,
         )
         .execute(&self.pool)
         .await
@@ -48,6 +63,7 @@ impl SqliteDatabase {
                 slug,
                 display_name,
                 public,
+                storage_id,
                 created_at
             FROM projects
             WHERE slug = ?
@@ -71,6 +87,7 @@ impl SqliteDatabase {
                 slug,
                 display_name,
                 public,
+                storage_id,
                 created_at
             FROM projects
             ORDER BY slug ASC
@@ -83,6 +100,30 @@ impl SqliteDatabase {
         rows.into_iter()
             .map(ProjectLookupRow::into_record)
             .collect()
+    }
+
+    pub async fn get_project_storage_id(&self, slug: &ProjectSlug) -> Result<Option<StorageId>> {
+        let slug_text = slug.as_str();
+
+        let storage_id = sqlx::query_scalar!(
+            r#"
+            SELECT storage_id
+            FROM projects
+            WHERE slug = ?
+            LIMIT 1
+            "#,
+            slug_text,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("getting project storage id")?
+        .flatten();
+
+        storage_id
+            .map(StorageId::new)
+            .transpose()
+            .map_err(anyhow::Error::new)
+            .context("parsing project storage_id")
     }
 
     pub(crate) async fn project_id_by_slug(&self, slug: &ProjectSlug) -> Result<String> {

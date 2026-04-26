@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cache_core::view::CacheView;
 use cache_store::blob::{BlobBytes, BlobMetadata};
 
-use crate::local_objects::DbBackedLocalObjectStore;
+use crate::local_objects::DbBackedObjectStore;
 
 #[async_trait]
 pub trait CacheObjectProvider: Send + Sync + 'static {
@@ -19,12 +19,12 @@ pub trait CacheObjectProvider: Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct DbBlobCacheObjectProvider {
-    local_objects: DbBackedLocalObjectStore,
+    object_store: DbBackedObjectStore,
 }
 
 impl DbBlobCacheObjectProvider {
-    pub fn new(local_objects: DbBackedLocalObjectStore) -> Self {
-        Self { local_objects }
+    pub fn new(object_store: DbBackedObjectStore) -> Self {
+        Self { object_store }
     }
 }
 
@@ -35,7 +35,7 @@ impl CacheObjectProvider for DbBlobCacheObjectProvider {
         view: &CacheView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
-        self.local_objects.get_visible(view, object_path).await
+        self.object_store.get_visible(view, object_path).await
     }
 }
 

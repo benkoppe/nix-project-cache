@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use tokio::fs;
 use tokio::process::Command;
 
-use cache_app::{AppParts, build_app_with_authorizer, build_app_with_parts};
+use cache_app::{AppMode, AppParts, build_app_with_authorizer, build_app_with_parts};
 use cache_auth::{
     ChainAuthorizer, OidcAuthorizer, OidcConfig, OidcProviderConfig, ReqwestOidcHttpClient,
     StaticTokenAuthorizer,
@@ -15,7 +15,7 @@ use cache_core::nix::parse_path_info_json;
 use cache_store::upstream::ReqwestUpstreamCacheClient;
 use cache_test_utils::{
     EXAMPLE_PROJECT_NAME, RecordedOidcTokenRequest, TestDatabase, TestGitHubActionsOidcServer,
-    TestServer, example_project, filesystem_backends_in, test_signing_key,
+    TestServer, example_project, filesystem_storage_in, test_signing_key,
 };
 
 const WRITE_TOKEN: &str = "secret-token";
@@ -175,8 +175,8 @@ async fn cache_push_can_publish_and_read_back_path() -> Result<()> {
             store_dir: cache_core::nix::StoreDir::default(),
             aggregate_signing_key: Some(test_signing_key()),
             key_encryption_key: None,
-            local_backends: filesystem_backends_in(&fixture.temp_dir),
-            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            mode: AppMode::ReadWrite,
+            storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         Some(WRITE_TOKEN.to_owned()),
@@ -344,8 +344,8 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
             store_dir: cache_core::nix::StoreDir::default(),
             aggregate_signing_key: Some(test_signing_key()),
             key_encryption_key: None,
-            local_backends: filesystem_backends_in(&fixture.temp_dir),
-            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            mode: AppMode::ReadWrite,
+            storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         Arc::new(oidc_authorizer),
@@ -474,8 +474,8 @@ async fn cache_ctl_setup_then_cache_push_with_github_oidc_works() -> Result<()> 
             store_dir: cache_core::nix::StoreDir::default(),
             aggregate_signing_key: Some(test_signing_key()),
             key_encryption_key: None,
-            local_backends: filesystem_backends_in(&fixture.temp_dir),
-            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            mode: AppMode::ReadWrite,
+            storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         Arc::new(admin_and_oidc_authorizer(&oidc_server, audience)),
@@ -617,8 +617,8 @@ async fn cache_ctl_token_create_then_cache_push_with_project_token_enforces_ref_
             store_dir: cache_core::nix::StoreDir::default(),
             aggregate_signing_key: Some(test_signing_key()),
             key_encryption_key: None,
-            local_backends: filesystem_backends_in(&fixture.temp_dir),
-            writable_local_backend: Some(cache_core::storage::LocalBackendName::fs()),
+            mode: AppMode::ReadWrite,
+            storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         Some(WRITE_TOKEN.to_owned()),

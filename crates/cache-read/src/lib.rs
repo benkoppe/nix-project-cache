@@ -8,7 +8,7 @@ pub mod signing_keys;
 pub mod state;
 pub mod upstreams;
 
-pub use local_objects::DbBackedLocalObjectStore;
+pub use local_objects::DbBackedObjectStore;
 pub use object_provider::{
     CacheObjectProvider, DbBlobCacheObjectProvider, InMemoryCacheObjectProvider,
 };

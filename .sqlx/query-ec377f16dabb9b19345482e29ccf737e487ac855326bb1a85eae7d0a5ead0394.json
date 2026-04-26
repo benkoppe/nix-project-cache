@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT\n                id,\n                slug,\n                display_name,\n                public,\n                created_at\n            FROM projects\n            ORDER BY slug ASC\n            ",
+  "query": "\n            SELECT\n                id,\n                slug,\n                display_name,\n                public,\n                storage_id,\n                created_at\n            FROM projects\n            WHERE slug = ?\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -24,21 +24,27 @@
         "type_info": "Integer"
       },
       {
-        "name": "created_at",
+        "name": "storage_id",
         "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
       false,
+      true,
       false
     ]
   },
-  "hash": "d0aa5802000e126b32f9af53f56c12cb2a838489367d13c9cf0f88d6f686b416"
+  "hash": "ec377f16dabb9b19345482e29ccf737e487ac855326bb1a85eae7d0a5ead0394"
 }

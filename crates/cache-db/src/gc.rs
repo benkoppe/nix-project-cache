@@ -2,8 +2,15 @@ use anyhow::{Context as _, Result};
 use sqlx::{QueryBuilder, Sqlite};
 
 use cache_core::nix::StorePathHash;
+use cache_core::storage::StorageId;
 
 use crate::pool::SqliteDatabase;
+
+#[derive(Debug, Clone)]
+pub struct StorageObjectKey {
+    pub storage_id: StorageId,
+    pub object_path: String,
+}
 
 impl SqliteDatabase {
     pub async fn list_root_store_path_hashes(&self) -> Result<Vec<StorePathHash>> {
@@ -83,7 +90,7 @@ impl SqliteDatabase {
             .collect()
     }
 
-    pub async fn list_live_local_object_paths(&self) -> Result<Vec<String>> {
+    pub async fn list_live_storage_object_paths(&self) -> Result<Vec<String>> {
         let roots = self.list_root_store_path_hashes().await?;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
@@ -101,46 +108,55 @@ impl SqliteDatabase {
             .build_query_as::<(String,)>()
             .fetch_all(&self.pool)
             .await
-            .context("listing live local object paths")?;
+            .context("listing live storage object paths")?;
 
         Ok(rows.into_iter().map(|(object_path,)| object_path).collect())
     }
 
-    pub async fn list_stale_local_object_paths(&self) -> Result<Vec<String>> {
+    pub async fn list_stale_storage_objects(&self) -> Result<Vec<StorageObjectKey>> {
         let roots = self.list_root_store_path_hashes().await?;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_live_objects_cte(&mut builder, &roots);
         builder.push(
             r#"
-            SELECT lo.object_path
-            FROM local_objects lo
+            SELECT so.storage_id, so.object_path
+            FROM storage_objects so
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM live_objects lio
-                WHERE lio.object_path = lo.object_path
+                WHERE lio.object_path = so.object_path
             )
-            ORDER BY lo.object_path ASC
+            ORDER BY so.storage_id ASC, so.object_path ASC
             "#,
         );
 
         let rows = builder
-            .build_query_as::<(String,)>()
+            .build_query_as::<(String, String)>()
             .fetch_all(&self.pool)
             .await
-            .context("listing stale local object paths")?;
+            .context("listing stale storage objects")?;
 
-        Ok(rows.into_iter().map(|(object_path,)| object_path).collect())
+        rows.into_iter()
+            .map(|(storage_id, object_path)| {
+                Ok(StorageObjectKey {
+                    storage_id: StorageId::new(storage_id)
+                        .map_err(anyhow::Error::new)
+                        .context("parsing storage_id")?,
+                    object_path,
+                })
+            })
+            .collect()
     }
 
-    pub async fn clear_deleted_state_for_live_local_objects(&self) -> Result<()> {
+    pub async fn clear_deleted_state_for_live_storage_objects(&self) -> Result<()> {
         let roots = self.list_root_store_path_hashes().await?;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_live_objects_cte(&mut builder, &roots);
         builder.push(
             r#"
-            UPDATE local_objects
+            UPDATE storage_objects
             SET
                 deleted_at = NULL,
                 first_deleted_at = NULL
@@ -148,7 +164,7 @@ impl SqliteDatabase {
             AND EXISTS (
                 SELECT 1
                 FROM live_objects lio
-                WHERE lio.object_path = local_objects.object_path
+                WHERE lio.object_path = storage_objects.object_path
             )
             "#,
         );
@@ -157,19 +173,19 @@ impl SqliteDatabase {
             .build()
             .execute(&self.pool)
             .await
-            .context("clearing tombstones for live local objects")?;
+            .context("clearing tombstones for live storage objects")?;
 
         Ok(())
     }
 
-    pub async fn mark_stale_local_objects(&self) -> Result<()> {
+    pub async fn mark_stale_storage_objects(&self) -> Result<()> {
         let roots = self.list_root_store_path_hashes().await?;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_live_objects_cte(&mut builder, &roots);
         builder.push(
             r#"
-            UPDATE local_objects
+            UPDATE storage_objects
             SET
                 deleted_at = COALESCE(
                     deleted_at,
@@ -182,7 +198,7 @@ impl SqliteDatabase {
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM live_objects lio
-                WHERE lio.object_path = local_objects.object_path
+                WHERE lio.object_path = storage_objects.object_path
             )
             "#,
         );
@@ -191,56 +207,74 @@ impl SqliteDatabase {
             .build()
             .execute(&self.pool)
             .await
-            .context("marking stale local objects")?;
+            .context("marking stale storage objects")?;
 
         Ok(())
     }
 
-    pub async fn list_local_objects_ready_for_deletion(
+    pub async fn list_storage_objects_ready_for_deletion(
         &self,
         grace_period_seconds: i64,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<StorageObjectKey>> {
         let rows = sqlx::query!(
             r#"
-            SELECT object_path
-            FROM local_objects
+            SELECT storage_id, object_path
+            FROM storage_objects
             WHERE deleted_at IS NOT NULL
-              AND first_deleted_at IS NOT NULL
-              AND unixepoch(first_deleted_at) <= unixepoch('now') - ?
-            ORDER BY object_path ASC
+            AND first_deleted_at IS NOT NULL
+            AND unixepoch(first_deleted_at) <= unixepoch('now') - ?
+            ORDER BY storage_id ASC, object_path ASC
             "#,
             grace_period_seconds,
         )
         .fetch_all(&self.pool)
         .await
-        .context("listing local objects ready for deletion")?;
+        .context("listing storage objects ready for deletion")?;
 
-        Ok(rows.into_iter().map(|row| row.object_path).collect())
+        rows.into_iter()
+            .map(|row| {
+                Ok(StorageObjectKey {
+                    storage_id: StorageId::new(row.storage_id)
+                        .map_err(anyhow::Error::new)
+                        .context("parsing storage_id")?,
+                    object_path: row.object_path,
+                })
+            })
+            .collect()
     }
 
-    pub async fn delete_local_objects_by_path(&self, object_paths: &[String]) -> Result<()> {
+    pub async fn delete_storage_objects(&self, objects: &[StorageObjectKey]) -> Result<()> {
         let mut tx = self
             .pool
             .begin()
             .await
-            .context("beginning delete_local_objects_by_path transaction")?;
+            .context("beginning delete_storage_objects transaction")?;
 
-        for object_path in object_paths {
+        for object in objects {
+            let storage_id = object.storage_id.as_str();
+
             sqlx::query!(
                 r#"
-                DELETE FROM local_objects
-                WHERE object_path = ?
-                "#,
-                object_path,
+                DELETE FROM storage_objects
+                WHERE storage_id = ?
+                  AND object_path = ?
+            "#,
+                storage_id,
+                object.object_path,
             )
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("deleting local object row {}", object_path))?;
+            .with_context(|| {
+                format!(
+                    "deleting storage object row {}:{}",
+                    object.storage_id, object.object_path
+                )
+            })?;
         }
 
         tx.commit()
             .await
-            .context("committing delete_local_objects_by_path transaction")?;
+            .context("committing delete_storage_objects transaction")?;
 
         Ok(())
     }

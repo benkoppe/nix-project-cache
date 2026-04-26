@@ -12,6 +12,7 @@ pub struct ProjectLookupRow {
     pub slug: String,
     pub display_name: String,
     pub public: i64,
+    pub storage_id: Option<String>,
     pub created_at: String,
 }
 
@@ -21,6 +22,7 @@ pub struct ProjectRecord {
     pub slug: ProjectSlug,
     pub display_name: String,
     pub public: bool,
+    pub storage_id: Option<cache_core::storage::StorageId>,
     pub created_at: OffsetDateTime,
 }
 
@@ -32,6 +34,12 @@ impl ProjectLookupRow {
                 .map_err(|_| anyhow::anyhow!("invalid project slug {}", self.slug))?,
             display_name: self.display_name,
             public: self.public != 0,
+            storage_id: self
+                .storage_id
+                .map(cache_core::storage::StorageId::new)
+                .transpose()
+                .map_err(anyhow::Error::new)
+                .context("parsing project storage_id")?,
             created_at: OffsetDateTime::parse(&self.created_at, &Rfc3339)
                 .context("parsing project created_at")?,
         })
@@ -200,13 +208,12 @@ pub struct PathSignatureValueRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct LocalObjectLookupRow {
+pub struct StorageObjectLookupRow {
+    pub storage_id: String,
     pub content_type: String,
     pub content_length: Option<i64>,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
-    pub storage_backend: String,
-    pub storage_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -23,6 +23,7 @@ use cache_api::{
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
 use cache_core::signing::NamedSigningKey;
+use cache_core::storage::StorageId;
 
 use crate::authz::{AuthorizationServiceError, AuthorizedPrincipal};
 use crate::state::WriteAppState;
@@ -390,6 +391,7 @@ pub async fn list_projects(
                     .into_iter()
                     .map(|project| ProjectInfo {
                         slug: project.slug.as_str().to_owned(),
+                        storage_id: project.storage_id.map(|id| id.as_str().to_owned()),
                         display_name: project.display_name,
                         public: project.public,
                         created_at: project.created_at.to_string(),
@@ -428,9 +430,31 @@ pub async fn upsert_project(
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
+    let storage_id = match request.storage_id {
+        Some(raw_storage_id) => {
+            let storage_id = match StorageId::new(raw_storage_id) {
+                Ok(storage_id) => storage_id,
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            };
+
+            if state.storage_catalog.storage(&storage_id).is_err() {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+
+            Some(storage_id)
+        }
+        None if state.storage_catalog.is_single_backend() => None,
+        None => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
     match state
         .db
-        .insert_project(&project, &request.display_name, request.public)
+        .insert_project_with_storage(
+            &project,
+            &request.display_name,
+            request.public,
+            storage_id.as_ref(),
+        )
         .await
     {
         Ok(()) => {

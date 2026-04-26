@@ -17,6 +17,7 @@ use cache_api::{
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
+use cache_core::storage::StorageId;
 
 use crate::error::CacheClientError;
 use crate::routes;
@@ -212,6 +213,17 @@ impl CacheClient {
         display_name: &str,
         public: bool,
     ) -> Result<(), CacheClientError> {
+        self.upsert_project_with_storage(project, display_name, public, None)
+            .await
+    }
+
+    pub async fn upsert_project_with_storage(
+        &self,
+        project: &ProjectSlug,
+        display_name: &str,
+        public: bool,
+        storage_id: Option<&StorageId>,
+    ) -> Result<(), CacheClientError> {
         let url = routes::upsert_project(&self.base_url)?;
         let response = self
             .request(Method::POST, url)
@@ -219,6 +231,7 @@ impl CacheClient {
                 slug: project.as_str().to_owned(),
                 display_name: display_name.to_owned(),
                 public,
+                storage_id: storage_id.map(|id| id.as_str().to_owned()),
             })
             .send()
             .await?;
@@ -590,8 +603,6 @@ mod tests {
                 required_uploads: vec![cache_api::RequiredUpload {
                     store_path_hash: path.hash_str(),
                     object_path: path.url().to_owned(),
-                    storage_backend: "fs".to_owned(),
-                    storage_key: path.url().to_owned(),
                     content_type: "application/octet-stream".to_owned(),
                 }],
             }),
@@ -673,6 +684,7 @@ mod tests {
             StatusCode::OK,
             Json(vec![ProjectInfo {
                 slug: EXAMPLE_PROJECT_SLUG.to_owned(),
+                storage_id: None,
                 display_name: EXAMPLE_PROJECT_NAME.to_owned(),
                 public: true,
                 created_at: "2026-04-20T00:00:00Z".to_owned(),
@@ -682,6 +694,7 @@ mod tests {
 
     async fn upsert_project_handler(Json(request): Json<UpsertProjectRequest>) -> StatusCode {
         assert_eq!(request.slug, EXAMPLE_PROJECT_SLUG);
+        assert_eq!(request.storage_id, None);
         assert_eq!(request.display_name, EXAMPLE_PROJECT_NAME);
         assert!(request.public);
         StatusCode::NO_CONTENT

@@ -1,7 +1,7 @@
-use cache_store::local::LocalUploadReader;
+use cache_store::local::UploadReader;
 use tokio::io::AsyncWriteExt as _;
 
-pub fn duplex_reader(bytes: impl Into<Vec<u8>>) -> LocalUploadReader {
+pub fn duplex_reader(bytes: impl Into<Vec<u8>>) -> UploadReader {
     let bytes = bytes.into();
     let (mut writer, reader) = tokio::io::duplex(bytes.len().max(1));
 

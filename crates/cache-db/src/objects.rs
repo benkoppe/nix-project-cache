@@ -3,22 +3,21 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cache_core::nix::StorePathHash;
-use cache_core::storage::{LocalBackendName, PathObjectKind};
+use cache_core::storage::{PathObjectKind, StorageId};
 use cache_core::view::CacheView;
 use cache_store::blob::BlobMetadata;
 
-use crate::models::LocalObjectLookupRow;
+use crate::models::StorageObjectLookupRow;
 use crate::pool::SqliteDatabase;
 
 #[derive(Debug, Clone)]
-pub struct LocalObjectRecord {
+pub struct StorageObjectRecord {
+    pub storage_id: StorageId,
     pub metadata: BlobMetadata,
-    pub storage_backend: LocalBackendName,
-    pub storage_key: String,
 }
 
-impl LocalObjectLookupRow {
-    pub fn into_record(self) -> Result<LocalObjectRecord> {
+impl StorageObjectLookupRow {
+    pub fn into_record(self) -> Result<StorageObjectRecord> {
         let last_modified = self
             .last_modified
             .as_deref()
@@ -26,32 +25,31 @@ impl LocalObjectLookupRow {
             .transpose()
             .context("parsing local object last_modified")?;
 
-        Ok(LocalObjectRecord {
+        Ok(StorageObjectRecord {
+            storage_id: StorageId::new(self.storage_id)
+                .map_err(anyhow::Error::new)
+                .context("parsing storage object storage_id")?,
             metadata: BlobMetadata::new(
                 self.content_type,
                 self.content_length
                     .map(u64::try_from)
                     .transpose()
-                    .context("converting context_length to u64")?,
+                    .context("converting content_length to u64")?,
                 self.etag,
                 last_modified,
             ),
-            storage_backend: LocalBackendName::new(self.storage_backend)
-                .map_err(anyhow::Error::new)
-                .context("parsing local object storage_backend")?,
-            storage_key: self.storage_key,
         })
     }
 }
 
 impl SqliteDatabase {
-    pub async fn upsert_local_object(
+    pub async fn upsert_storage_object(
         &self,
+        storage_id: &StorageId,
         object_path: &str,
         metadata: &BlobMetadata,
-        storage_backend: &LocalBackendName,
-        storage_key: &str,
     ) -> Result<()> {
+        let storage_id_text = storage_id.as_str();
         let content_type = metadata.content_type.as_str();
         let content_length = metadata
             .content_length
@@ -64,37 +62,32 @@ impl SqliteDatabase {
             .map(|value| value.format(&Rfc3339))
             .transpose()
             .context("formatting last_modified")?;
-        let storage_backend_text = storage_backend.as_str();
 
         sqlx::query!(
             r#"
-            INSERT INTO local_objects (
+            INSERT INTO storage_objects (
+                storage_id,
                 object_path,
                 content_type,
                 content_length,
                 etag,
-                last_modified,
-                storage_backend,
-                storage_key
+                last_modified
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(object_path) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(storage_id, object_path) DO UPDATE SET
                 content_type = excluded.content_type,
                 content_length = excluded.content_length,
                 etag = excluded.etag,
                 last_modified = excluded.last_modified,
-                storage_backend = excluded.storage_backend,
-                storage_key = excluded.storage_key,
                 deleted_at = NULL,
                 first_deleted_at = NULL
             "#,
+            storage_id_text,
             object_path,
             content_type,
             content_length,
             etag,
             last_modified,
-            storage_backend_text,
-            storage_key,
         )
         .execute(&self.pool)
         .await
@@ -103,31 +96,36 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn get_local_object(&self, object_path: &str) -> Result<Option<LocalObjectRecord>> {
-        let row = sqlx::query_as!(
-            LocalObjectLookupRow,
+    pub async fn list_storage_objects(
+        &self,
+        object_path: &str,
+    ) -> Result<Vec<StorageObjectRecord>> {
+        let rows = sqlx::query_as!(
+            StorageObjectLookupRow,
             r#"
             SELECT
+                storage_id,
                 content_type,
                 content_length,
                 etag,
-                last_modified,
-                storage_backend,
-                storage_key
-            FROM local_objects
+                last_modified
+            FROM storage_objects
             WHERE object_path = ?
-            LIMIT 1
+              AND deleted_at IS NULL
+            ORDER BY storage_id ASC
             "#,
             object_path,
         )
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await
-        .context("fetching local object")?;
+        .context("listing storage objects")?;
 
-        row.map(LocalObjectLookupRow::into_record).transpose()
+        rows.into_iter()
+            .map(StorageObjectLookupRow::into_record)
+            .collect()
     }
 
-    pub async fn local_object_visible_in_view(
+    pub async fn storage_object_visible_in_view(
         &self,
         view: &CacheView,
         object_path: &str,
@@ -227,20 +225,5 @@ impl SqliteDatabase {
         .context("checking path object link")?;
 
         Ok(row.is_some())
-    }
-
-    pub async fn delete_local_object(&self, object_path: &str) -> Result<()> {
-        sqlx::query!(
-            r#"
-            DELETE FROM local_objects
-            WHERE object_path = ?
-            "#,
-            object_path,
-        )
-        .execute(&self.pool)
-        .await
-        .context("deleting local object")?;
-
-        Ok(())
     }
 }

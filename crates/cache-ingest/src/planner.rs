@@ -1,19 +1,16 @@
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 
 use cache_api::RequiredUpload;
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
-use cache_core::storage::LocalBackendName;
-use cache_store::local::LocalObjectStore;
+use cache_store::ObjectStore;
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
 
 #[derive(Debug, Clone)]
 pub struct PlannedUpload {
     pub store_path_hash: StorePathHash,
     pub object_path: String,
-    pub storage_backend: String,
-    pub storage_key: String,
     pub content_type: String,
 }
 
@@ -22,16 +19,13 @@ impl PlannedUpload {
         RequiredUpload {
             store_path_hash: self.store_path_hash.as_str().to_owned(),
             object_path: self.object_path.clone(),
-            storage_backend: self.storage_backend.clone(),
-            storage_key: self.storage_key.clone(),
             content_type: self.content_type.clone(),
         }
     }
 }
 
 pub async fn plan_required_uploads(
-    local_store: &dyn LocalObjectStore,
-    writable_local_backend: Option<&LocalBackendName>,
+    object_store: &dyn ObjectStore,
     upstream_client: &dyn UpstreamCacheClient,
     upstreams: &[UpstreamCache],
     narinfos: &[NarInfo],
@@ -49,7 +43,7 @@ pub async fn plan_required_uploads(
             _ => continue,
         }
 
-        if local_store.head(&object_path).await?.is_some() {
+        if object_store.head(&object_path).await?.is_some() {
             continue;
         }
 
@@ -69,18 +63,9 @@ pub async fn plan_required_uploads(
             continue;
         }
 
-        let backend = writable_local_backend.ok_or_else(|| {
-            anyhow!(
-                "local upload required for {} but no writable local backend is configured",
-                object_path
-            )
-        })?;
-
         planned.push(PlannedUpload {
             store_path_hash,
             object_path: object_path.clone(),
-            storage_backend: backend.as_str().to_owned(),
-            storage_key: object_path,
             content_type: "application/octet-stream".to_owned(),
         });
     }

@@ -11,12 +11,12 @@ use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::{StoreDir, StorePathHash};
 use cache_core::project::ProjectSlug;
-use cache_core::storage::{LocalBackendName, PathObjectKind};
+use cache_core::storage::{PathObjectKind, StorageId};
 use cache_core::validation::validate_publish_narinfo;
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
-use cache_store::local::{LocalObjectBackendRegistry, LocalObjectStore, LocalUploadReader};
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
+use cache_store::{ObjectStore, StorageCatalog, UploadReader};
 
 use crate::planner::plan_required_uploads;
 
@@ -24,9 +24,8 @@ use crate::planner::plan_required_uploads;
 pub struct IngestService {
     db: SqliteDatabase,
     store_dir: StoreDir,
-    local_store: Arc<dyn LocalObjectStore>,
-    local_backends: LocalObjectBackendRegistry,
-    writable_local_backend: Option<LocalBackendName>,
+    object_store: Arc<dyn ObjectStore>,
+    storage_catalog: StorageCatalog,
     upstream_client: Arc<dyn UpstreamCacheClient>,
 }
 
@@ -34,17 +33,15 @@ impl IngestService {
     pub fn new(
         db: SqliteDatabase,
         store_dir: StoreDir,
-        local_store: Arc<dyn LocalObjectStore>,
-        local_backends: LocalObjectBackendRegistry,
-        writable_local_backend: Option<LocalBackendName>,
+        object_store: Arc<dyn ObjectStore>,
+        storage_catalog: StorageCatalog,
         upstream_client: Arc<dyn UpstreamCacheClient>,
     ) -> Self {
         Self {
             db,
             store_dir,
-            local_store,
-            local_backends,
-            writable_local_backend,
+            object_store,
+            storage_catalog,
             upstream_client,
         }
     }
@@ -95,13 +92,29 @@ impl IngestService {
         let upstreams = self.project_upstreams(&build_context.project_slug).await?;
 
         let planned = plan_required_uploads(
-            self.local_store.as_ref(),
-            self.writable_local_backend.as_ref(),
+            self.object_store.as_ref(),
             self.upstream_client.as_ref(),
             &upstreams,
             &narinfos,
         )
         .await?;
+
+        for narinfo in &narinfos {
+            let store_path_hash = StorePathHash::parse_from_store_path(&narinfo.store_path)
+                .context("deriving store path hash for path object linking")?;
+            let object_path = narinfo.url.clone();
+
+            match parse_cache_object_path(&object_path) {
+                Some(CacheObjectPath::Nar { .. }) => {}
+                _ => continue,
+            }
+
+            if self.object_store.head(&object_path).await?.is_some() {
+                self.db
+                    .link_path_object(&store_path_hash, &object_path, PathObjectKind::Nar)
+                    .await?;
+            }
+        }
 
         Ok(RegisterPathsResponse {
             required_uploads: planned
@@ -116,7 +129,7 @@ impl IngestService {
         build_id: Uuid,
         store_path_hash: &StorePathHash,
         object_path: &str,
-        body: LocalUploadReader,
+        body: UploadReader,
     ) -> Result<()> {
         let build_context = self
             .db
@@ -157,19 +170,16 @@ impl IngestService {
             ));
         }
 
-        let backend_name = self.writable_local_backend.as_ref().ok_or_else(|| {
-            anyhow!(
-                "build {} requires a writable local backend for uploads",
-                build_id
-            )
-        })?;
-        let backend = self.local_backends.require(backend_name)?;
-        let written = backend.put_stream(object_path, body).await?;
+        let storage_id = self
+            .storage_id_for_project(&build_context.project_slug)
+            .await?;
+        let storage = self.storage_catalog.storage(&storage_id)?;
+        let written = storage.put_stream(object_path, body).await?;
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(written), None, None);
 
         self.db
-            .upsert_local_object(object_path, &metadata, backend_name, object_path)
+            .upsert_storage_object(&storage_id, object_path, &metadata)
             .await?;
         self.db
             .link_path_object(store_path_hash, object_path, PathObjectKind::Nar)
@@ -205,7 +215,7 @@ impl IngestService {
                 .db
                 .path_has_object(&store_path_hash, &object_path, PathObjectKind::Nar)
                 .await?
-                && self.local_store.head(&object_path).await?.is_some();
+                && self.object_store.head(&object_path).await?.is_some();
 
             if locally_available {
                 continue;
@@ -265,6 +275,14 @@ impl IngestService {
 
         Ok(false)
     }
+
+    async fn storage_id_for_project(&self, project_slug: &ProjectSlug) -> Result<StorageId> {
+        Ok(self
+            .db
+            .get_project_storage_id(project_slug)
+            .await?
+            .unwrap_or_else(|| self.storage_catalog.default_storage_id().clone()))
+    }
 }
 
 #[cfg(test)]
@@ -276,13 +294,13 @@ mod tests {
 
     use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
     use cache_core::nix::StoreDir;
-    use cache_core::storage::{LocalBackendName, PathObjectKind};
+    use cache_core::storage::PathObjectKind;
     use cache_db::{BuildStatus, SqliteDatabase};
-    use cache_read::DbBackedLocalObjectStore;
+    use cache_read::DbBackedObjectStore;
     use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
-        EXAMPLE_PROJECT_SLUG, TestDatabase, duplex_reader, example_project, filesystem_backends_in,
+        EXAMPLE_PROJECT_SLUG, TestDatabase, duplex_reader, example_project, filesystem_storage_in,
         hello_path, sample_upstream,
     };
 
@@ -290,20 +308,18 @@ mod tests {
 
     async fn build_service(
         upstream_client: InMemoryUpstreamCacheClient,
-        writable_local_backend: Option<LocalBackendName>,
     ) -> (IngestService, SqliteDatabase, TempDir) {
         let fixture = TestDatabase::new().await.unwrap();
         fixture.insert_example_project().await.unwrap();
 
-        let backends = filesystem_backends_in(&fixture.temp_dir);
-        let local_store = DbBackedLocalObjectStore::new(fixture.db.clone(), backends.clone());
+        let storage_catalog = filesystem_storage_in(&fixture.temp_dir);
+        let object_store = DbBackedObjectStore::new(fixture.db.clone(), storage_catalog.clone());
 
         let service = IngestService::new(
             fixture.db.clone(),
             StoreDir::default(),
-            Arc::new(local_store),
-            backends,
-            writable_local_backend,
+            Arc::new(object_store),
+            storage_catalog,
             Arc::new(upstream_client),
         );
 
@@ -338,11 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_links_path_object_and_finalize_succeeds() {
-        let (service, db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let path = hello_path();
         let payload = path.payload();
@@ -395,11 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_rejects_missing_required_nar() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
         let payload = hello_path().payload();
 
         let begin = service
@@ -449,7 +457,7 @@ mod tests {
             BlobBytes::from_static(b"upstream-nar"),
         );
 
-        let (service, db, _tmp) = build_service(upstream_client, None).await;
+        let (service, db, _tmp) = build_service(upstream_client).await;
         let project = example_project();
 
         db.insert_upstream_cache(&upstream, true).await.unwrap();
@@ -493,40 +501,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_paths_rejects_required_upload_when_no_writable_backend_is_configured() {
-        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new(), None).await;
-
-        let begin = service
-            .begin_build(BeginBuildRequest {
-                project: EXAMPLE_PROJECT_SLUG.to_owned(),
-                ref_name: "main".to_owned(),
-                revision: None,
-            })
-            .await
-            .unwrap();
-
-        let error = service
-            .register_paths(RegisterPathsRequest {
-                build_id: begin.build_id,
-                paths: vec![hello_path().payload()],
-            })
-            .await
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("no writable local backend is configured")
-        )
-    }
-
-    #[tokio::test]
     async fn register_paths_rejects_store_path_outside_store_dir() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let mut payload = hello_path().payload();
         payload.store_path = "/tmp/not-in-store".to_owned();
@@ -541,11 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_paths_rejects_url_that_does_not_match_nar_hash() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let mut payload = hello_path().payload();
         payload.url = "nar/1111111111111111111111111111111111111111111111111111.nar.zst".to_owned();
@@ -560,11 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_paths_rejects_compression_that_does_not_match_url() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let mut payload = hello_path().payload();
         payload.compression = "xz".to_owned();
@@ -579,11 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_paths_rejects_reference_outside_store_dir() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let mut payload = hello_path().payload();
         payload.references = vec!["/tmp/not-in-store".to_owned()];
@@ -595,11 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_paths_rejects_deriver_outside_store_dir() {
-        let (service, _db, _tmp) = build_service(
-            InMemoryUpstreamCacheClient::new(),
-            Some(LocalBackendName::fs()),
-        )
-        .await;
+        let (service, _db, _tmp) = build_service(InMemoryUpstreamCacheClient::new()).await;
 
         let mut payload = hello_path().payload();
         payload.deriver = Some("/tmp/not-in-store.drv".to_owned());

@@ -31,14 +31,13 @@ mod tests {
         OidcProviderConfig, StaticOidcHttpClient, StaticTokenAuthorizer,
     };
     use cache_core::nix::StoreDir;
-    use cache_core::storage::LocalBackendName;
     use cache_db::SqliteDatabase;
     use cache_ingest::{GcService, IngestService};
-    use cache_store::local::InMemoryLocalObjectStore;
+    use cache_store::local::InMemoryObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
-        EXAMPLE_PROJECT_SLUG, TestDatabase, TestOidcIssuer, example_project,
-        filesystem_backends_in, hello_path,
+        EXAMPLE_PROJECT_SLUG, TestDatabase, TestOidcIssuer, example_project, filesystem_storage_in,
+        hello_path,
     };
 
     use super::*;
@@ -79,22 +78,22 @@ mod tests {
         let fixture = TestDatabase::new().await.unwrap();
         fixture.insert_example_project().await.unwrap();
 
-        let backends = filesystem_backends_in(&fixture.temp_dir);
+        let storage_catalog = filesystem_storage_in(&fixture.temp_dir);
 
         let ingest_service = IngestService::new(
             fixture.db.clone(),
             StoreDir::default(),
-            Arc::new(InMemoryLocalObjectStore::new()),
-            backends.clone(),
-            Some(LocalBackendName::fs()),
+            Arc::new(InMemoryObjectStore::new()),
+            storage_catalog.clone(),
             Arc::new(InMemoryUpstreamCacheClient::new()),
         );
-        let gc_service = GcService::new(fixture.db.clone(), backends);
+        let gc_service = GcService::new(fixture.db.clone(), storage_catalog.clone());
 
         let authorization_service = AuthorizationService::new(fixture.db.clone(), authorizer);
 
         let state = WriteAppState::new(
             fixture.db.clone(),
+            storage_catalog,
             Arc::new(ingest_service),
             Arc::new(gc_service),
             Arc::new(authorization_service),

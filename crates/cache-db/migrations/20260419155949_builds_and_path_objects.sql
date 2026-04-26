@@ -43,9 +43,8 @@ CREATE TABLE path_objects (
     store_path_hash TEXT NOT NULL,
     object_path TEXT NOT NULL,
     kind TEXT NOT NULL,
-    PRIMARY KEY (store_path_hash, object_path),
-    FOREIGN KEY (store_path_hash) REFERENCES path_infos(store_path_hash) ON DELETE CASCADE,
-    FOREIGN KEY (object_path) REFERENCES local_objects(object_path) ON DELETE CASCADE
+    PRIMARY KEY (store_path_hash, object_path, kind),
+    FOREIGN KEY (store_path_hash) REFERENCES path_infos(store_path_hash) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_path_objects_object_path

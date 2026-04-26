@@ -25,9 +25,16 @@ pub struct AppConfig {
     pub storage: StorageConfig,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppMode {
+    ReadWrite,
+    ReadOnly,
+}
+
 #[derive(Clone)]
 pub struct ServerConfig {
     pub bind_address: String,
+    pub mode: AppMode,
 }
 
 #[derive(Clone)]
@@ -73,6 +80,7 @@ struct RawAppConfig {
 #[serde(default, deny_unknown_fields)]
 struct RawServerConfig {
     bind_address: String,
+    mode: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -112,6 +120,7 @@ impl Default for RawServerConfig {
     fn default() -> Self {
         Self {
             bind_address: "127.0.0.1:8080".to_owned(),
+            mode: "read-write".to_owned(),
         }
     }
 }
@@ -167,7 +176,7 @@ impl TryFrom<RawAppConfig> for AppConfig {
 
     fn try_from(raw: RawAppConfig) -> Result<Self> {
         Ok(Self {
-            server: raw.server.into(),
+            server: raw.server.try_into()?,
             database: raw.database.into(),
             nix: raw.nix.try_into()?,
             logging: raw.logging.into(),
@@ -178,11 +187,23 @@ impl TryFrom<RawAppConfig> for AppConfig {
     }
 }
 
-impl From<RawServerConfig> for ServerConfig {
-    fn from(raw: RawServerConfig) -> Self {
-        Self {
+impl TryFrom<RawServerConfig> for ServerConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: RawServerConfig) -> Result<Self> {
+        let mode = match raw.mode.trim() {
+            "read-write" => AppMode::ReadWrite,
+            "read-only" => AppMode::ReadOnly,
+            "" => bail!("server.mode must not be empty"),
+            other => {
+                bail!("unknown server.mode {other:?}; expected \"read-write\" or \"read-only\"")
+            }
+        };
+
+        Ok(Self {
             bind_address: raw.bind_address,
-        }
+            mode,
+        })
     }
 }
 

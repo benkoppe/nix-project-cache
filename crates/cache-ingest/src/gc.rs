@@ -2,19 +2,22 @@ use anyhow::{Context as _, Result};
 
 use cache_api::RunGcResponse;
 use cache_db::SqliteDatabase;
-use cache_store::local::LocalObjectBackendRegistry;
+use cache_store::StorageCatalog;
 
 const DEFAULT_GC_GRACE_PERIOD_SECONDS: i64 = 6 * 60 * 60;
 
 #[derive(Clone)]
 pub struct GcService {
     db: SqliteDatabase,
-    local_backends: LocalObjectBackendRegistry,
+    storage_catalog: StorageCatalog,
 }
 
 impl GcService {
-    pub fn new(db: SqliteDatabase, local_backends: LocalObjectBackendRegistry) -> Self {
-        Self { db, local_backends }
+    pub fn new(db: SqliteDatabase, storage_catalog: StorageCatalog) -> Self {
+        Self {
+            db,
+            storage_catalog,
+        }
     }
 
     pub async fn run_local_gc(&self, dry_run: bool) -> Result<RunGcResponse> {
@@ -28,207 +31,189 @@ impl GcService {
         grace_period_seconds: i64,
     ) -> Result<RunGcResponse> {
         if dry_run {
-            let stale_paths = self.db.list_stale_local_object_paths().await?;
+            let stale_objects = self.db.list_stale_storage_objects().await?;
             return Ok(RunGcResponse {
-                deleted_count: stale_paths.len(),
-                deleted_objects: stale_paths,
+                deleted_count: stale_objects.len(),
+                deleted_objects: stale_objects
+                    .into_iter()
+                    .map(|object| object.object_path)
+                    .collect(),
             });
         }
 
-        self.db.clear_deleted_state_for_live_local_objects().await?;
-        self.db.mark_stale_local_objects().await?;
+        self.db
+            .clear_deleted_state_for_live_storage_objects()
+            .await?;
+        self.db.mark_stale_storage_objects().await?;
 
-        let ready_paths = self
+        let ready_objects = self
             .db
-            .list_local_objects_ready_for_deletion(grace_period_seconds)
+            .list_storage_objects_ready_for_deletion(grace_period_seconds)
             .await?;
 
-        let mut deleted = Vec::with_capacity(ready_paths.len());
+        let mut deleted_rows = Vec::with_capacity(ready_objects.len());
+        let mut deleted_paths = Vec::with_capacity(ready_objects.len());
 
-        for object_path in ready_paths {
-            let Some(record) = self.db.get_local_object(&object_path).await? else {
-                continue;
-            };
-
-            let backend = self
-                .local_backends
-                .require(&record.storage_backend)
+        for object in ready_objects {
+            let storage = self
+                .storage_catalog
+                .storage(&object.storage_id)
                 .with_context(|| {
                     format!(
-                        "resolving backend {} for {}",
-                        record.storage_backend, object_path
+                        "resolving storage backend {} for {}",
+                        object.storage_id, object.object_path
                     )
                 })?;
 
-            backend
-                .delete(&record.storage_key)
-                .await
-                .with_context(|| format!("deleting backend object {}", object_path))?;
+            storage.delete(&object.object_path).await.with_context(|| {
+                format!(
+                    "deleting object {} from storage {}",
+                    object.object_path, object.storage_id
+                )
+            })?;
 
-            deleted.push(object_path);
+            deleted_paths.push(object.object_path.clone());
+            deleted_rows.push(object);
         }
 
-        self.db.delete_local_objects_by_path(&deleted).await?;
+        self.db.delete_storage_objects(&deleted_rows).await?;
 
         Ok(RunGcResponse {
-            deleted_count: deleted.len(),
-            deleted_objects: deleted,
+            deleted_count: deleted_paths.len(),
+            deleted_objects: deleted_paths,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use cache_core::storage::{LocalBackendName, PathObjectKind};
+    use cache_core::storage::{PathObjectKind, StorageId};
     use cache_db::SqliteDatabase;
+    use cache_store::StorageCatalog;
     use cache_store::blob::{BlobBytes, BlobMetadata};
-    use cache_store::local::{
-        FilesystemLocalObjectBackend, LocalObjectBackend, LocalObjectBackendRegistry,
-    };
-    use cache_test_utils::{TestDatabase, filesystem_backends_in, hello_path};
+    use cache_test_utils::{TestDatabase, filesystem_storage_in, hello_path};
 
     use super::*;
 
-    async fn setup() -> (
-        SqliteDatabase,
-        LocalObjectBackendRegistry,
-        tempfile::TempDir,
-    ) {
+    async fn setup() -> (SqliteDatabase, StorageCatalog, tempfile::TempDir) {
         let fixture = TestDatabase::new().await.unwrap();
         fixture.insert_example_project().await.unwrap();
 
-        let backends = filesystem_backends_in(&fixture.temp_dir);
+        let storage_catalog = filesystem_storage_in(&fixture.temp_dir);
 
-        (fixture.db, backends, fixture.temp_dir)
+        (fixture.db, storage_catalog, fixture.temp_dir)
     }
 
     #[tokio::test]
     async fn dry_run_reports_stale_objects_without_deleting() {
-        let (db, backends, _tmp) = setup().await;
-        let gc = GcService::new(db.clone(), backends);
+        let (db, storage_catalog, _tmp) = setup().await;
+        let gc = GcService::new(db.clone(), storage_catalog);
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
-        db.upsert_local_object(
-            "nar/stale.nar.zst",
-            &metadata,
-            &LocalBackendName::fs(),
-            "nar/stale.nar.zst",
-        )
-        .await
-        .unwrap();
+        let path = "nar/stale.nar.zst";
+
+        db.upsert_storage_object(&StorageId::main(), path, &metadata)
+            .await
+            .unwrap();
 
         let result = gc.run_local_gc(true).await.unwrap();
 
         assert_eq!(result.deleted_count, 1);
-        assert_eq!(result.deleted_objects, vec!["nar/stale.nar.zst".to_owned()]);
-        assert!(
-            db.get_local_object("nar/stale.nar.zst")
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert_eq!(result.deleted_objects, vec![path.to_owned()]);
+        assert!(!db.list_storage_objects(path).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn default_gc_grace_marks_but_does_not_delete() {
-        let (db, backends, _tmp) = setup().await;
-        let backend = backends.require(&LocalBackendName::fs()).unwrap();
+        let (db, storage_catalog, _tmp) = setup().await;
+        let storage = storage_catalog.default_storage().unwrap();
 
-        backend
-            .put_bytes("nar/stale.nar.zst", BlobBytes::from_static(b"dead"))
+        let path = "nar/stale.nar.zst";
+        storage
+            .put_bytes(path, BlobBytes::from_static(b"dead"))
             .await
             .unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
-        db.upsert_local_object(
-            "nar/stale.nar.zst",
-            &metadata,
-            &LocalBackendName::fs(),
-            "nar/stale.nar.zst",
-        )
-        .await
-        .unwrap();
+        db.upsert_storage_object(&StorageId::main(), path, &metadata)
+            .await
+            .unwrap();
 
-        let gc = GcService::new(db.clone(), backends.clone());
+        let gc = GcService::new(db.clone(), storage_catalog);
         let result = gc.run_local_gc(false).await.unwrap();
 
         assert_eq!(result.deleted_count, 0);
-        assert!(
-            db.get_local_object("nar/stale.nar.zst")
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(storage.contains(path).await.unwrap());
 
-        let ready = db.list_local_objects_ready_for_deletion(0).await.unwrap();
-        assert_eq!(ready, vec!["nar/stale.nar.zst".to_owned()]);
+        let ready = db.list_storage_objects_ready_for_deletion(0).await.unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].storage_id, StorageId::main());
+        assert_eq!(ready[0].object_path, path);
     }
 
     #[tokio::test]
     async fn gc_deletes_unreachable_local_object_when_grace_is_zero() {
-        let (db, backends, tmp) = setup().await;
+        let (db, storage_catalog, _tmp) = setup().await;
+        let storage = storage_catalog.default_storage().unwrap();
 
-        let backend = backends.require(&LocalBackendName::fs()).unwrap();
-        backend
-            .put_bytes("nar/stale.nar.zst", BlobBytes::from_static(b"dead"))
+        let path = "nar/stale.nar.zst";
+        storage
+            .put_bytes(path, BlobBytes::from_static(b"dead"))
             .await
             .unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
-        db.upsert_local_object(
-            "nar/stale.nar.zst",
-            &metadata,
-            &LocalBackendName::fs(),
-            "nar/stale.nar.zst",
-        )
-        .await
-        .unwrap();
+        db.upsert_storage_object(&StorageId::main(), path, &metadata)
+            .await
+            .unwrap();
 
-        let gc = GcService::new(db.clone(), backends.clone());
+        let gc = GcService::new(db.clone(), storage_catalog.clone());
         let result = gc.run_local_gc_with_grace_period(false, 0).await.unwrap();
 
         assert_eq!(result.deleted_count, 1);
-        assert!(
-            db.get_local_object("nar/stale.nar.zst")
-                .await
-                .unwrap()
-                .is_none()
-        );
-
-        let fs_backend = FilesystemLocalObjectBackend::new(tmp.path().join("objects"));
-        assert!(!fs_backend.contains("nar/stale.nar.zst").await.unwrap());
+        assert!(db.list_storage_objects(path).await.unwrap().is_empty());
+        assert!(!storage.contains(path).await.unwrap());
     }
 
     #[tokio::test]
     async fn pinned_path_keeps_local_object_live() {
-        let (db, backends, _tmp) = setup().await;
-        let backend = backends.require(&LocalBackendName::fs()).unwrap();
+        let (db, storage_catalog, _tmp) = setup().await;
+        let storage = storage_catalog.default_storage().unwrap();
 
         let path = hello_path();
         let hash = path.hash();
         let narinfo = path.narinfo();
+        let object_path = path.url();
 
         db.upsert_path_info(&narinfo).await.unwrap();
-        backend
-            .put_bytes(path.url(), BlobBytes::from_static(b"live"))
+
+        storage
+            .put_bytes(object_path, BlobBytes::from_static(b"live"))
             .await
             .unwrap();
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
-        db.upsert_local_object(path.url(), &metadata, &LocalBackendName::fs(), path.url())
+        db.upsert_storage_object(&StorageId::main(), object_path, &metadata)
             .await
             .unwrap();
-        db.link_path_object(&hash, path.url(), PathObjectKind::Nar)
+
+        db.link_path_object(&hash, object_path, PathObjectKind::Nar)
             .await
             .unwrap();
+
         db.upsert_pin("myapp", None, &hash, &narinfo.store_path)
             .await
             .unwrap();
 
-        let gc = GcService::new(db.clone(), backends);
+        let gc = GcService::new(db.clone(), storage_catalog);
         let result = gc.run_local_gc(false).await.unwrap();
 
         assert_eq!(result.deleted_count, 0);
-        assert!(db.get_local_object(path.url()).await.unwrap().is_some());
+        assert!(
+            !db.list_storage_objects(object_path)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

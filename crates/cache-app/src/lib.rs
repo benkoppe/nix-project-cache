@@ -12,45 +12,49 @@ use cache_auth::{
 use cache_core::key_crypto::KeyEncryptionKey;
 use cache_core::nix::StoreDir;
 use cache_core::signing::NamedSigningKey;
-use cache_core::storage::LocalBackendName;
 use cache_db::SqliteDatabase;
 use cache_ingest::{GcService, IngestService};
 use cache_read::{
-    DbBackedLocalObjectStore, DbBlobCacheObjectProvider, DbNarInfoResolver, DbProjectSigningKeys,
+    DbBackedObjectStore, DbBlobCacheObjectProvider, DbNarInfoResolver, DbProjectSigningKeys,
     DbUpstreamSelector, ReadAppState, ReadService, read_router,
 };
-use cache_store::local::LocalObjectBackendRegistry;
+use cache_store::StorageCatalog;
 use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
 use cache_write::{AuthorizationService, WriteAppState, write_router};
 
-pub use config::AppConfig;
+pub use config::{AppConfig, AppMode};
 pub use storage::{S3StorageConfig, StorageConfig};
 
 pub struct AppParts {
     pub db: SqliteDatabase,
+    pub mode: AppMode,
     pub store_dir: StoreDir,
     pub aggregate_signing_key: Option<NamedSigningKey>,
     pub key_encryption_key: Option<KeyEncryptionKey>,
-    pub local_backends: LocalObjectBackendRegistry,
-    pub writable_local_backend: Option<LocalBackendName>,
+    pub storage_catalog: StorageCatalog,
     pub upstream_client: Arc<dyn UpstreamCacheClient>,
 }
 
 pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
-    let db = SqliteDatabase::open(&config.database.path)
-        .await
-        .context("opening sqlite metadata database")?;
+    let db = match config.server.mode {
+        AppMode::ReadWrite => SqliteDatabase::open(&config.database.path)
+            .await
+            .context("opening sqlite metadata database")?,
+        AppMode::ReadOnly => SqliteDatabase::open_read_only(&config.database.path)
+            .await
+            .context("opening sqlite metadata database read-only")?,
+    };
 
     let authorizer = build_default_authorizer(config)?;
 
     Ok(build_app_with_authorizer(
         AppParts {
             db,
+            mode: config.server.mode,
             store_dir: config.nix.store_dir.clone(),
             aggregate_signing_key: config.signing.aggregate_signing_key.clone(),
             key_encryption_key: config.signing.project_key_encryption_key.clone(),
-            local_backends: config.storage.local_object_backends()?,
-            writable_local_backend: config.storage.writable_backend.clone(),
+            storage_catalog: config.storage.catalog()?,
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
         },
         authorizer,
@@ -64,18 +68,18 @@ pub fn build_app_with_parts(parts: AppParts, write_token: Option<String>) -> Rou
 pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer>) -> Router {
     let AppParts {
         db,
+        mode,
         store_dir,
         aggregate_signing_key,
         key_encryption_key,
-        local_backends,
-        writable_local_backend,
+        storage_catalog,
         upstream_client,
     } = parts;
 
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
 
-    let local_objects = DbBackedLocalObjectStore::new(db.clone(), local_backends.clone());
-    let object_provider = DbBlobCacheObjectProvider::new(local_objects.clone());
+    let object_store = DbBackedObjectStore::new(db.clone(), storage_catalog.clone());
+    let object_provider = DbBlobCacheObjectProvider::new(object_store.clone());
     let upstream_selector = DbUpstreamSelector::new(db.clone());
 
     let project_signing_keys = key_encryption_key
@@ -92,28 +96,35 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
         project_signing_keys,
     );
 
+    let read_state = ReadAppState::new(Arc::new(read_service), 30);
+    let read_routes = read_router(read_state);
+
+    if mode == AppMode::ReadOnly {
+        return read_routes;
+    }
+
     let ingest_service = IngestService::new(
         db.clone(),
-        store_dir.clone(),
-        Arc::new(local_objects),
-        local_backends.clone(),
-        writable_local_backend,
+        store_dir,
+        Arc::new(object_store),
+        storage_catalog.clone(),
         upstream_client,
     );
 
-    let gc_service = GcService::new(db.clone(), local_backends);
+    let gc_service = GcService::new(db.clone(), storage_catalog.clone());
     let authorization_service = AuthorizationService::new(db.clone(), authorizer);
 
-    let read_state = ReadAppState::new(Arc::new(read_service), 30);
     let write_state = WriteAppState::new(
         db,
+        storage_catalog,
         Arc::new(ingest_service),
         Arc::new(gc_service),
         Arc::new(authorization_service),
         key_encryption_key,
     );
+    let write_routes = write_router(write_state);
 
-    read_router(read_state).merge(write_router(write_state))
+    read_routes.merge(write_routes)
 }
 
 fn build_default_authorizer(config: &AppConfig) -> anyhow::Result<Arc<dyn Authorizer>> {

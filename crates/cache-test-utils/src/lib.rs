@@ -15,4 +15,4 @@ pub use io::duplex_reader;
 pub use oidc::{
     RecordedOidcTokenRequest, TestGitHubActionsOidcServer, TestOidcClaims, TestOidcIssuer,
 };
-pub use storage::filesystem_backends_in;
+pub use storage::filesystem_storage_in;

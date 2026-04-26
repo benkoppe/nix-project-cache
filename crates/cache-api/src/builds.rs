@@ -38,8 +38,6 @@ pub struct RegisterPathsRequest {
 pub struct RequiredUpload {
     pub store_path_hash: String,
     pub object_path: String,
-    pub storage_backend: String,
-    pub storage_key: String,
     pub content_type: String,
 }
 

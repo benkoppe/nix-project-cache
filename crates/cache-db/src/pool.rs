@@ -46,6 +46,25 @@ impl SqliteDatabase {
         Ok(db)
     }
 
+    pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let url = format!("sqlite://{}", path.to_string_lossy());
+
+        let options = SqliteConnectOptions::from_str(&url)
+            .context("building sqlite read-only connect options")?
+            .read_only(true)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .context("opening sqlite read-only pool")?;
+
+        Ok(Self { pool })
+    }
+
     #[cfg(test)]
     pub async fn open_temp_for_tests() -> Result<(Self, tempfile::TempDir)> {
         let temp_dir = tempfile::tempdir().context("creating temporary sqlite test directory")?;

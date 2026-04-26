@@ -1,17 +1,15 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use cache_core::storage::LocalBackendName;
-use cache_store::local::{FilesystemLocalObjectBackend, LocalObjectBackendRegistry};
+use cache_core::storage::StorageId;
+use cache_store::{CacheStorage, FilesystemStorage, StorageCatalog};
 
-pub fn filesystem_backends_in(temp_dir: &TempDir) -> LocalObjectBackendRegistry {
-    let mut backends = LocalObjectBackendRegistry::new();
-    backends.register(
-        LocalBackendName::fs(),
-        Arc::new(FilesystemLocalObjectBackend::new(
-            temp_dir.path().join("objects"),
-        )),
-    );
-    backends
+pub fn filesystem_storage_in(temp_dir: &TempDir) -> StorageCatalog {
+    let storage_id = StorageId::main();
+    let storage: Arc<dyn CacheStorage> =
+        Arc::new(FilesystemStorage::new(temp_dir.path().join("objects")));
+
+    StorageCatalog::new(storage_id.clone(), BTreeMap::from([(storage_id, storage)])).unwrap()
 }

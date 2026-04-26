@@ -10,10 +10,10 @@ use aws_sdk_s3::primitives::ByteStream;
 use tokio::io::AsyncWriteExt as _;
 
 use crate::blob::BlobBytes;
-use crate::local::{LocalObjectBackend, LocalUploadReader};
+use crate::local::{CacheStorage, UploadReader};
 
 #[derive(Debug, Clone)]
-pub struct S3LocalObjectBackendConfig {
+pub struct S3StorageConfig {
     pub endpoint: String,
     pub bucket: String,
     pub region: String,
@@ -24,14 +24,14 @@ pub struct S3LocalObjectBackendConfig {
 }
 
 #[derive(Clone)]
-pub struct S3LocalObjectBackend {
+pub struct S3Storage {
     client: Client,
     bucket: String,
     prefix: Option<String>,
 }
 
-impl S3LocalObjectBackend {
-    pub fn new(config: S3LocalObjectBackendConfig) -> Result<Self> {
+impl S3Storage {
+    pub fn new(config: S3StorageConfig) -> Result<Self> {
         let credentials = Credentials::new(
             config.access_key_id,
             config.secret_access_key,
@@ -69,12 +69,12 @@ impl S3LocalObjectBackend {
         })
     }
 
-    fn object_key(&self, storage_key: &str) -> Result<String> {
-        validate_storage_key(storage_key)?;
+    fn object_key(&self, object_path: &str) -> Result<String> {
+        validate_object_path(object_path)?;
 
         Ok(match &self.prefix {
-            Some(prefix) => format!("{prefix}/{storage_key}"),
-            None => storage_key.to_owned(),
+            Some(prefix) => format!("{prefix}/{object_path}"),
+            None => object_path.to_owned(),
         })
     }
 }
@@ -89,22 +89,22 @@ fn normalize_prefix(prefix: Option<String>) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    validate_storage_key(&prefix)?;
+    validate_object_path(&prefix)?;
     Ok(Some(prefix))
 }
 
-fn validate_storage_key(storage_key: &str) -> Result<()> {
-    if storage_key.is_empty() {
-        return Err(anyhow!("invalid empty storage key"));
+fn validate_object_path(object_path: &str) -> Result<()> {
+    if object_path.is_empty() {
+        return Err(anyhow!("invalid empty object path"));
     }
 
-    if storage_key.starts_with('/') {
-        return Err(anyhow!("invalid storage key {storage_key}"));
+    if object_path.starts_with('/') {
+        return Err(anyhow!("invalid object path {object_path}"));
     }
 
-    for segment in storage_key.split('/') {
+    for segment in object_path.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
-            return Err(anyhow!("invalid storage key {storage_key}"));
+            return Err(anyhow!("invalid object path {object_path}"));
         }
     }
 
@@ -119,9 +119,9 @@ where
 }
 
 #[async_trait]
-impl LocalObjectBackend for S3LocalObjectBackend {
-    async fn contains(&self, storage_key: &str) -> Result<bool> {
-        let key = self.object_key(storage_key)?;
+impl CacheStorage for S3Storage {
+    async fn contains(&self, object_path: &str) -> Result<bool> {
+        let key = self.object_key(object_path)?;
 
         match self
             .client
@@ -138,8 +138,8 @@ impl LocalObjectBackend for S3LocalObjectBackend {
         }
     }
 
-    async fn get_bytes(&self, storage_key: &str) -> Result<Option<BlobBytes>> {
-        let key = self.object_key(storage_key)?;
+    async fn get_bytes(&self, object_path: &str) -> Result<Option<BlobBytes>> {
+        let key = self.object_key(object_path)?;
 
         let object = match self
             .client
@@ -167,8 +167,8 @@ impl LocalObjectBackend for S3LocalObjectBackend {
         Ok(Some(BlobBytes::from(bytes)))
     }
 
-    async fn put_bytes(&self, storage_key: &str, bytes: BlobBytes) -> Result<()> {
-        let key = self.object_key(storage_key)?;
+    async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> Result<()> {
+        let key = self.object_key(object_path)?;
 
         self.client
             .put_object()
@@ -182,8 +182,8 @@ impl LocalObjectBackend for S3LocalObjectBackend {
         Ok(())
     }
 
-    async fn put_stream(&self, storage_key: &str, mut reader: LocalUploadReader) -> Result<u64> {
-        let key = self.object_key(storage_key)?;
+    async fn put_stream(&self, object_path: &str, mut reader: UploadReader) -> Result<u64> {
+        let key = self.object_key(object_path)?;
 
         let temp_file =
             tempfile::NamedTempFile::new().context("creating temporary file for S3 upload")?;
@@ -225,8 +225,8 @@ impl LocalObjectBackend for S3LocalObjectBackend {
         Ok(written)
     }
 
-    async fn delete(&self, storage_key: &str) -> Result<()> {
-        let key = self.object_key(storage_key)?;
+    async fn delete(&self, object_path: &str) -> Result<()> {
+        let key = self.object_key(object_path)?;
 
         self.client
             .delete_object()
@@ -295,8 +295,8 @@ mod tests {
             }
         }
 
-        fn backend(&self) -> S3LocalObjectBackend {
-            S3LocalObjectBackend::new(S3LocalObjectBackendConfig {
+        fn storage(&self) -> S3Storage {
+            S3Storage::new(S3StorageConfig {
                 endpoint: self.endpoint.clone(),
                 bucket: self.bucket.clone(),
                 region: "us-east-1".to_owned(),
@@ -308,8 +308,8 @@ mod tests {
             .unwrap()
         }
 
-        fn backend_with_prefix(&self, prefix: impl Into<String>) -> S3LocalObjectBackend {
-            S3LocalObjectBackend::new(S3LocalObjectBackendConfig {
+        fn storage_with_prefix(&self, prefix: impl Into<String>) -> S3Storage {
+            S3Storage::new(S3StorageConfig {
                 endpoint: self.endpoint.clone(),
                 bucket: self.bucket.clone(),
                 region: "us-east-1".to_owned(),
@@ -405,35 +405,35 @@ mod tests {
     #[tokio::test]
     async fn contains_returns_false_for_missing_object() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        assert!(!backend.contains("nar/missing.nar").await.unwrap());
+        assert!(!storage.contains("nar/missing.nar").await.unwrap());
     }
 
     #[tokio::test]
     async fn put_bytes_then_contains_returns_true() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        backend
+        storage
             .put_bytes("nar/object.nar", BlobBytes::from_static(b"hello"))
             .await
             .unwrap();
 
-        assert!(backend.contains("nar/object.nar").await.unwrap());
+        assert!(storage.contains("nar/object.nar").await.unwrap());
     }
 
     #[tokio::test]
     async fn put_bytes_then_get_bytes_returns_object() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        backend
+        storage
             .put_bytes("nar/object.nar", BlobBytes::from_static(b"hello"))
             .await
             .unwrap();
 
-        let bytes = backend.get_bytes("nar/object.nar").await.unwrap().unwrap();
+        let bytes = storage.get_bytes("nar/object.nar").await.unwrap().unwrap();
 
         assert_eq!(bytes, BlobBytes::from_static(b"hello"));
     }
@@ -441,10 +441,10 @@ mod tests {
     #[tokio::test]
     async fn get_bytes_returns_none_for_missing_object() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
         assert!(
-            backend
+            storage
                 .get_bytes("nar/missing.nar")
                 .await
                 .unwrap()
@@ -455,19 +455,19 @@ mod tests {
     #[tokio::test]
     async fn put_stream_writes_object_and_returns_size() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        let reader: LocalUploadReader =
+        let reader: UploadReader =
             Box::pin(std::io::Cursor::new(Bytes::from_static(b"streamed-object")));
 
-        let written = backend
+        let written = storage
             .put_stream("nar/streamed.nar", reader)
             .await
             .unwrap();
 
         assert_eq!(written, 15);
 
-        let bytes = backend
+        let bytes = storage
             .get_bytes("nar/streamed.nar")
             .await
             .unwrap()
@@ -478,33 +478,33 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_object() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        backend
+        storage
             .put_bytes("nar/object.nar", BlobBytes::from_static(b"hello"))
             .await
             .unwrap();
 
-        backend.delete("nar/object.nar").await.unwrap();
+        storage.delete("nar/object.nar").await.unwrap();
 
-        assert!(!backend.contains("nar/object.nar").await.unwrap());
-        assert!(backend.get_bytes("nar/object.nar").await.unwrap().is_none());
+        assert!(!storage.contains("nar/object.nar").await.unwrap());
+        assert!(storage.get_bytes("nar/object.nar").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn delete_missing_object_succeeds() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        backend.delete("nar/missing.nar").await.unwrap();
+        storage.delete("nar/missing.nar").await.unwrap();
     }
 
     #[tokio::test]
     async fn prefix_is_applied_to_object_keys() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend_with_prefix("/cache-objects/");
+        let storage = server.storage_with_prefix("/cache-objects/");
 
-        backend
+        storage
             .put_bytes("nar/object.nar", BlobBytes::from_static(b"hello"))
             .await
             .unwrap();
@@ -516,16 +516,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_storage_keys_are_rejected() {
+    async fn invalid_object_paths_are_rejected() {
         let server = FakeS3Server::start().await;
-        let backend = server.backend();
+        let storage = server.storage();
 
-        assert!(backend.contains("").await.is_err());
-        assert!(backend.contains("/absolute").await.is_err());
-        assert!(backend.contains("../escape").await.is_err());
-        assert!(backend.contains("nar/../escape").await.is_err());
-        assert!(backend.contains("nar//object").await.is_err());
-        assert!(backend.contains("nar/./object").await.is_err());
+        assert!(storage.contains("").await.is_err());
+        assert!(storage.contains("/absolute").await.is_err());
+        assert!(storage.contains("../escape").await.is_err());
+        assert!(storage.contains("nar/../escape").await.is_err());
+        assert!(storage.contains("nar//object").await.is_err());
+        assert!(storage.contains("nar/./object").await.is_err());
     }
 
     #[test]

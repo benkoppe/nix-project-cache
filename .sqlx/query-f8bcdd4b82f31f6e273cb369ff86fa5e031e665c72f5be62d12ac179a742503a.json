@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT deleted_at, first_deleted_at\n            FROM local_objects\n            WHERE object_path = 'nar/test.nar.zst'\n            ",
+  "query": "\n            SELECT deleted_at, first_deleted_at\n            FROM storage_objects\n            WHERE storage_id = ?\n              AND object_path = ?\n        ",
   "describe": {
     "columns": [
       {
@@ -15,12 +15,12 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 2
     },
     "nullable": [
       true,
       true
     ]
   },
-  "hash": "4b1b9a9e1f3fd8ed8d4e76df9d5ba1e9729568f307fb9a13b38bdcaca05d700c"
+  "hash": "f8bcdd4b82f31f6e273cb369ff86fa5e031e665c72f5be62d12ac179a742503a"
 }

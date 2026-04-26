@@ -817,6 +817,7 @@ mod tests {
             slug: EXAMPLE_PROJECT_SLUG.to_owned(),
             display_name: EXAMPLE_PROJECT_NAME.to_owned(),
             public: true,
+            storage_id: None,
             created_at: "2026-04-20T00:00:00Z".to_owned(),
         }])
     }
