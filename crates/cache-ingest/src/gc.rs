@@ -55,15 +55,18 @@ impl GcService {
         let mut deleted_paths = Vec::with_capacity(ready_objects.len());
 
         for object in ready_objects {
-            let storage = self
-                .storage_catalog
-                .storage(&object.storage_id)
-                .with_context(|| {
-                    format!(
-                        "resolving storage backend {} for {}",
-                        object.storage_id, object.object_path
-                    )
-                })?;
+            let storage = match self.storage_catalog.storage(&object.storage_id) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        storage_id = %object.storage_id,
+                        object_path = %object.object_path,
+                        "skipping GC for object in unavailable storage backend"
+                    );
+                    continue;
+                }
+            };
 
             storage.delete(&object.object_path).await.with_context(|| {
                 format!(
@@ -91,7 +94,7 @@ mod tests {
     use cache_db::SqliteDatabase;
     use cache_store::StorageCatalog;
     use cache_store::blob::{BlobBytes, BlobMetadata};
-    use cache_test_utils::{TestDatabase, filesystem_storage_in, hello_path};
+    use cache_test_utils::{TestDatabase, example_project, filesystem_storage_in, hello_path};
 
     use super::*;
 
@@ -152,7 +155,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gc_deletes_unreachable_local_object_when_grace_is_zero() {
+    async fn gc_deletes_unreachable_storage_object_when_grace_is_zero() {
         let (db, storage_catalog, _tmp) = setup().await;
         let storage = storage_catalog.default_storage().unwrap();
 
@@ -176,7 +179,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pinned_path_keeps_local_object_live() {
+    async fn gc_does_not_delete_pending_build_object() {
+        let (db, storage_catalog, _tmp) = setup().await;
+        let storage = storage_catalog.default_storage().unwrap();
+
+        let path = hello_path();
+        let payload = path.payload();
+        let hash = path.hash();
+        let object_path = path.url();
+
+        db.upsert_path_info(&path.narinfo()).await.unwrap();
+
+        let build = db
+            .begin_build(&example_project(), "main", None)
+            .await
+            .unwrap();
+
+        db.attach_build_path(build.id, &hash).await.unwrap();
+
+        storage
+            .put_bytes(object_path, BlobBytes::from_static(b"pending"))
+            .await
+            .unwrap();
+
+        let metadata = BlobMetadata::new("application/octet-stream", Some(7), None, None);
+        db.upsert_storage_object(&StorageId::main(), object_path, &metadata)
+            .await
+            .unwrap();
+
+        db.link_path_object(&hash, &payload.url, PathObjectKind::Nar)
+            .await
+            .unwrap();
+
+        let gc = GcService::new(db.clone(), storage_catalog);
+        let result = gc.run_local_gc_with_grace_period(false, 0).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+        assert!(storage.contains(object_path).await.unwrap());
+        assert!(
+            !db.list_storage_objects(object_path)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_keeps_duplicate_storage_copies_for_live_object_path() {
+        let (db, storage_catalog, _tmp) = setup().await;
+
+        let path = hello_path();
+        let hash = path.hash();
+        let narinfo = path.narinfo();
+        let object_path = path.url();
+
+        db.upsert_path_info(&narinfo).await.unwrap();
+
+        let metadata = BlobMetadata::new("application/octet-stream", Some(4), None, None);
+        db.upsert_storage_object(&StorageId::main(), object_path, &metadata)
+            .await
+            .unwrap();
+
+        let alternate_storage_id = StorageId::new("alternate").unwrap();
+        db.upsert_storage_object(&alternate_storage_id, object_path, &metadata)
+            .await
+            .unwrap();
+
+        db.link_path_object(&hash, object_path, PathObjectKind::Nar)
+            .await
+            .unwrap();
+
+        db.upsert_pin("myapp", None, &hash, &narinfo.store_path)
+            .await
+            .unwrap();
+
+        let gc = GcService::new(db.clone(), storage_catalog);
+        let result = gc.run_local_gc(false).await.unwrap();
+
+        assert_eq!(result.deleted_count, 0);
+
+        let objects = db.list_storage_objects(object_path).await.unwrap();
+        assert_eq!(objects.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pinned_path_keeps_storage_object_live() {
         let (db, storage_catalog, _tmp) = setup().await;
         let storage = storage_catalog.default_storage().unwrap();
 

@@ -178,12 +178,21 @@ impl IngestService {
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(written), None, None);
 
-        self.db
-            .upsert_storage_object(&storage_id, object_path, &metadata)
-            .await?;
-        self.db
-            .link_path_object(store_path_hash, object_path, PathObjectKind::Nar)
-            .await?;
+        let persist_result = async {
+            self.db
+                .upsert_storage_object(&storage_id, object_path, &metadata)
+                .await?;
+            self.db
+                .link_path_object(store_path_hash, object_path, PathObjectKind::Nar)
+                .await?;
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        if persist_result.is_err() {
+            let _ = storage.delete(object_path).await;
+        }
 
         Ok(())
     }

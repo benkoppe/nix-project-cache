@@ -40,6 +40,25 @@ impl SqliteDatabase {
             }
         }
 
+        let pending_rows = sqlx::query!(
+            r#"
+            SELECT DISTINCT bp.store_path_hash
+            FROM build_paths bp
+            JOIN builds b ON b.id = bp.build_id
+            WHERE b.status = 'pending'
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing pending build root paths")?;
+
+        for row in pending_rows {
+            hashes.push(
+                StorePathHash::from_hash(&row.store_path_hash)
+                    .with_context(|| format!("invalid store_path_hash {}", row.store_path_hash))?,
+            );
+        }
+
         let pin_rows = sqlx::query!(
             r#"
             SELECT DISTINCT store_path_hash

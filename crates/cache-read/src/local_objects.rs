@@ -74,6 +74,51 @@ impl DbBackedObjectStore {
         Ok(None)
     }
 
+    async fn head_unscoped(
+        &self,
+        preferred_storage_id: Option<&StorageId>,
+        object_path: &str,
+    ) -> Result<Option<BlobMetadata>> {
+        let mut records = self.db.list_storage_objects(object_path).await?;
+
+        if let Some(preferred_storage_id) = preferred_storage_id {
+            records.sort_by_key(|record| {
+                if &record.storage_id == preferred_storage_id {
+                    (0, record.storage_id.clone())
+                } else {
+                    (1, record.storage_id.clone())
+                }
+            });
+        }
+
+        for record in records {
+            let storage = match self.catalog.storage(&record.storage_id) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        storage_id = %record.storage_id,
+                        object_path,
+                        "storage object references unavailable backend"
+                    );
+                    continue;
+                }
+            };
+
+            if storage.contains(object_path).await? {
+                return Ok(Some(record.metadata));
+            }
+
+            warn!(
+                storage_id = %record.storage_id,
+                object_path,
+                "storage object metadata exists but backend object is missing"
+            );
+        }
+
+        Ok(None)
+    }
+
     pub async fn get_visible(
         &self,
         view: &CacheView,
@@ -96,10 +141,8 @@ impl DbBackedObjectStore {
 #[async_trait]
 impl ObjectStore for DbBackedObjectStore {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
-        Ok(self
-            .get_unscoped(Some(self.catalog.default_storage_id()), object_path)
-            .await?
-            .map(|(metadata, _)| metadata))
+        self.head_unscoped(Some(self.catalog.default_storage_id()), object_path)
+            .await
     }
 
     async fn get(&self, object_path: &str) -> Result<Option<(BlobMetadata, BlobBytes)>> {

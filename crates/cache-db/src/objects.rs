@@ -23,7 +23,7 @@ impl StorageObjectLookupRow {
             .as_deref()
             .map(|value| OffsetDateTime::parse(value, &Rfc3339))
             .transpose()
-            .context("parsing local object last_modified")?;
+            .context("parsing storage object last_modified")?;
 
         Ok(StorageObjectRecord {
             storage_id: StorageId::new(self.storage_id)
@@ -91,7 +91,7 @@ impl SqliteDatabase {
         )
         .execute(&self.pool)
         .await
-        .context("upserting local object")?;
+        .context("upserting storage object")?;
 
         Ok(())
     }
