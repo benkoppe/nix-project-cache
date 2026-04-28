@@ -4,7 +4,6 @@ edition = "2024"
 version.workspace = true
 
 [dependencies]
-cache-core = { path = "../cache-core" }
 async-trait.workspace = true
 base64.workspace = true
 jsonwebtoken.workspace = true
@@ -14,7 +13,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 wildmatch.workspace = true
-subtle.workspace = true
 
 [dev-dependencies]
 cache-test-utils = { path = "../cache-test-utils" }

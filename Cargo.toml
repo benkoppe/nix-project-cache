@@ -74,7 +74,6 @@ async-compression = { version = "0.4", features = [
   "xz",
   "bzip2",
 ] }
-subtle = "2"
 time = { version = "0.3", features = [
   "serde",
   "formatting",

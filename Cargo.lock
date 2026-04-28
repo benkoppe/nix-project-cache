@@ -694,13 +694,11 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "base64",
- "cache-core",
  "cache-test-utils",
  "jsonwebtoken",
  "reqwest",
  "serde",
  "serde_json",
- "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -722,7 +720,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -773,7 +770,6 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tracing",
  "uuid",
  "wildmatch",
 ]
@@ -860,7 +856,6 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tracing",
  "url",
  "uuid",
 ]
