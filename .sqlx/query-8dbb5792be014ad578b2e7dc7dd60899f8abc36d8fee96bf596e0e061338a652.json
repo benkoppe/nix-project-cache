@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                pi.url\n            FROM build_paths bp\n            JOIN path_infos pi ON pi.store_path_hash = bp.store_path_hash\n            WHERE bp.build_id = ?\n              AND bp.store_path_hash = ?\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "url",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8dbb5792be014ad578b2e7dc7dd60899f8abc36d8fee96bf596e0e061338a652"
+}

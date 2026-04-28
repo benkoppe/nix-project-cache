@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT deleted_at, first_deleted_at\n            FROM storage_objects\n            WHERE storage_id = ?\n              AND object_path = ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "deleted_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "first_deleted_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "f8bcdd4b82f31f6e273cb369ff86fa5e031e665c72f5be62d12ac179a742503a"
+}

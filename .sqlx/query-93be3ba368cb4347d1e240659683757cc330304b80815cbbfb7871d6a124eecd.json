@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO project_signing_keys (\n                id,\n                project_id,\n                name,\n                public_key,\n                encrypted_private_key,\n                nonce\n            )\n            VALUES (?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "93be3ba368cb4347d1e240659683757cc330304b80815cbbfb7871d6a124eecd"
+}

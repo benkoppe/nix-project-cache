@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                store_path_hash,\n                store_path,\n                url,\n                compression,\n                nar_hash,\n                nar_size,\n                deriver,\n                ca\n            FROM path_infos\n            WHERE store_path_hash = ?\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "store_path_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "store_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "compression",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "nar_hash",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "nar_size",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "deriver",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "ca",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "ab64a48bf51b637f3f5579c902f04cba6eea254e301ae0311c28cf6fc81a6b68"
+}

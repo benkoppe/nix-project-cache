@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT 1 AS \"present!: i64\"\n            FROM path_objects\n            WHERE store_path_hash = ?\n              AND object_path = ?\n              AND kind = ?\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "present!: i64",
+        "ordinal": 0,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "67df2f71611effc2803efcfdd7bdeed8f59eaee9db77c22b5e40b5b4fd687c2b"
+}

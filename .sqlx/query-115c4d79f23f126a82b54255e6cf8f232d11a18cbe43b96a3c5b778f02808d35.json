@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                pi.store_path_hash,\n                pi.store_path,\n                pi.url,\n                pi.compression,\n                pi.nar_hash,\n                pi.nar_size,\n                pi.deriver,\n                pi.ca\n            FROM path_infos pi\n            WHERE pi.store_path_hash = ?\n                AND EXISTS (\n                    SELECT 1\n                    FROM aggregate_visible_paths avp\n                    WHERE avp.store_path_hash = pi.store_path_hash\n                )\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "store_path_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "store_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "compression",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "nar_hash",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "nar_size",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "deriver",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "ca",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "115c4d79f23f126a82b54255e6cf8f232d11a18cbe43b96a3c5b778f02808d35"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                SELECT id AS build_id\n                FROM builds\n                WHERE project_id = ?\n                  AND ref_name = ?\n                  AND status = 'finalized'\n                  AND finalized_at IS NOT NULL\n                ORDER BY finalized_at DESC, created_at DESC\n                LIMIT ?\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "build_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "873c1469b48698be6839ba14e904948c2842b136572db0b98b1f84c673bf6eb6"
+}

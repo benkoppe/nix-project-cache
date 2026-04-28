@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                SELECT\n                    pins.scope_key,\n                    pins.name,\n                    projects.slug AS project_slug,\n                    pins.store_path_hash,\n                    pins.store_path,\n                    pins.created_at,\n                    pins.updated_at\n                FROM pins\n                LEFT JOIN projects ON projects.id = pins.project_id\n                WHERE pins.scope_key = ?\n                ORDER BY pins.name ASC\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "scope_key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "project_slug",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "store_path_hash",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "store_path",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "71ffd4f1832c7a153c3fbe2c569fc3d82e1d3d4fc45851b82b49e04593ca558d"
+}

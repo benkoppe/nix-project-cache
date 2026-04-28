@@ -556,6 +556,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn presigned_put_url_uploads_object_to_prefixed_key() {
+        let server = FakeS3Server::start().await;
+        let storage = server.storage_with_prefix("/cache-objects/");
+
+        let presigned = storage
+            .presigned_put_url("nar/direct.nar", std::time::Duration::from_secs(300))
+            .await
+            .unwrap()
+            .expect("S3 storage should support presigned PUT");
+
+        let response = reqwest::Client::new()
+            .put(&presigned.url)
+            .body(Bytes::from_static(b"direct-upload"))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            server.stored("test-bucket/cache-objects/nar/direct.nar"),
+            Some(Bytes::from_static(b"direct-upload"))
+        );
+    }
+
+    #[tokio::test]
     async fn delete_removes_object() {
         let server = FakeS3Server::start().await;
         let storage = server.storage();

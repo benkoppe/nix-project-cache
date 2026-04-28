@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            DELETE FROM pins\n            WHERE scope_key = ? AND name = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4d5f7862fb700b7bc2270100a84e0d32667691866ba0abd4f29d3136c7a7a399"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO access_token_ref_patterns (\n                    token_id,\n                    ref_pattern\n                )\n                VALUES (?, ?)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d667073e7c36f603165b0ebd768bbf95bedbcc571b96ce3c8fb08e8e5c29f46d"
+}

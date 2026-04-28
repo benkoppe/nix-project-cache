@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT OR IGNORE INTO path_infos (\n                store_path_hash,\n                store_path,\n                url,\n                compression,\n                nar_hash,\n                nar_size,\n                deriver,\n                ca\n            )\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "69f5fa30e665e8d839e2892238fbd81a50098a98a953089782ffac84b143bafe"
+}

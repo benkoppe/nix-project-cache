@@ -783,6 +783,7 @@ name = "cache-ingest"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "cache-api",
  "cache-core",
  "cache-db",
@@ -790,6 +791,7 @@ dependencies = [
  "cache-store",
  "cache-test-utils",
  "tempfile",
+ "time",
  "tokio",
  "tracing",
  "uuid",

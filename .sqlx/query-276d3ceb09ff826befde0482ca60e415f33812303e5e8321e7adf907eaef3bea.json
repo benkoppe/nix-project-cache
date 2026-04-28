@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT storage_id, object_path\n            FROM storage_objects\n            WHERE deleted_at IS NOT NULL\n            AND first_deleted_at IS NOT NULL\n            AND unixepoch(first_deleted_at) <= unixepoch('now') - ?\n            ORDER BY storage_id ASC, object_path ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "storage_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "object_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "276d3ceb09ff826befde0482ca60e415f33812303e5e8321e7adf907eaef3bea"
+}

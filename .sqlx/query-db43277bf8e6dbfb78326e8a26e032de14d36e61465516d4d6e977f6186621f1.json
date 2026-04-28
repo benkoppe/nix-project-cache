@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                id,\n                name,\n                base_url,\n                priority,\n                enabled,\n                created_at\n            FROM upstream_caches\n            ORDER BY priority ASC, name ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "base_url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "priority",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "enabled",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "db43277bf8e6dbfb78326e8a26e032de14d36e61465516d4d6e977f6186621f1"
+}

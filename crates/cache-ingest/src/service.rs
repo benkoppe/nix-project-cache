@@ -319,23 +319,89 @@ impl IngestService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     use tempfile::TempDir;
+    use time::OffsetDateTime;
     use uuid::Uuid;
 
-    use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest};
+    use cache_api::{BeginBuildRequest, FinalizeBuildRequest, RegisterPathsRequest, UploadMethod};
     use cache_core::nix::StoreDir;
     use cache_core::storage::PathObjectKind;
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::upstream::InMemoryUpstreamCacheClient;
+    use cache_store::{CacheStorage, PresignedPutUrl};
     use cache_test_utils::{
         EXAMPLE_PROJECT_SLUG, TestDatabase, duplex_reader, example_project, filesystem_storage_in,
         hello_path, sample_upstream,
     };
 
     use super::*;
+
+    #[derive(Default)]
+    struct FakePresignedStorage {
+        objects: Mutex<HashMap<String, BlobMetadata>>,
+    }
+
+    impl FakePresignedStorage {
+        fn insert(&self, object_path: impl Into<String>, metadata: BlobMetadata) {
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(object_path.into(), metadata);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CacheStorage for FakePresignedStorage {
+        async fn head(&self, object_path: &str) -> anyhow::Result<Option<BlobMetadata>> {
+            Ok(self.objects.lock().unwrap().get(object_path).cloned())
+        }
+
+        async fn get_bytes(&self, _object_path: &str) -> anyhow::Result<Option<BlobBytes>> {
+            Ok(None)
+        }
+
+        async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> anyhow::Result<()> {
+            self.insert(
+                object_path,
+                BlobMetadata::new(
+                    "application/octet-stream",
+                    Some(bytes.len() as u64),
+                    None,
+                    None,
+                ),
+            );
+            Ok(())
+        }
+
+        async fn put_stream(
+            &self,
+            _object_path: &str,
+            _reader: UploadReader,
+        ) -> anyhow::Result<u64> {
+            anyhow::bail!("proxy upload should not be used in this test")
+        }
+
+        async fn presigned_put_url(
+            &self,
+            object_path: &str,
+            _expires_in: Duration,
+        ) -> anyhow::Result<Option<PresignedPutUrl>> {
+            Ok(Some(PresignedPutUrl {
+                url: format!("https://uploads.example.invalid/{object_path}"),
+                expires_at: OffsetDateTime::now_utc() + time::Duration::hours(1),
+            }))
+        }
+
+        async fn delete(&self, object_path: &str) -> anyhow::Result<()> {
+            self.objects.lock().unwrap().remove(object_path);
+            Ok(())
+        }
+    }
 
     async fn build_service(
         upstream_client: InMemoryUpstreamCacheClient,
@@ -350,6 +416,27 @@ mod tests {
             StoreDir::default(),
             storage_catalog,
             Arc::new(upstream_client),
+        );
+
+        (service, fixture.db, fixture.temp_dir)
+    }
+
+    async fn build_service_with_storage(
+        storage: Arc<dyn CacheStorage>,
+    ) -> (IngestService, SqliteDatabase, TempDir) {
+        let fixture = TestDatabase::new().await.unwrap();
+        fixture.insert_example_project().await.unwrap();
+
+        let storage_id = StorageId::main();
+        let storage_catalog =
+            StorageCatalog::new(storage_id.clone(), BTreeMap::from([(storage_id, storage)]))
+                .unwrap();
+
+        let service = IngestService::new(
+            fixture.db.clone(),
+            StoreDir::default(),
+            storage_catalog,
+            Arc::new(InMemoryUpstreamCacheClient::new()),
         );
 
         (service, fixture.db, fixture.temp_dir)
@@ -596,5 +683,96 @@ mod tests {
         let error = register_single_path_error(&service, payload).await;
 
         assert!(error.to_string().contains("deriver"), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn register_paths_returns_presigned_put_when_storage_supports_it() {
+        let storage = Arc::new(FakePresignedStorage::default());
+        let (service, _db, _tmp) = build_service_with_storage(storage).await;
+
+        let path = hello_path();
+        let payload = path.payload();
+
+        let begin = service
+            .begin_build(BeginBuildRequest {
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_name: "main".to_owned(),
+                revision: Some("deadbeef".to_owned()),
+            })
+            .await
+            .unwrap();
+
+        let register = service
+            .register_paths(RegisterPathsRequest {
+                build_id: begin.build_id,
+                paths: vec![payload.clone()],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(register.required_uploads.len(), 1);
+        assert_eq!(register.required_uploads[0].object_path, payload.url);
+
+        match &register.required_uploads[0].method {
+            UploadMethod::PresignedPut { url, expires_at } => {
+                assert!(url.contains("uploads.example.invalid"));
+                assert!(url.contains(&payload.url));
+                assert!(!expires_at.is_empty());
+            }
+            UploadMethod::Proxy => panic!("expected presigned PUT upload method"),
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_links_direct_uploaded_object_found_by_storage_head() {
+        let storage = Arc::new(FakePresignedStorage::default());
+        let (service, db, _tmp) = build_service_with_storage(storage.clone()).await;
+
+        let path = hello_path();
+        let payload = path.payload();
+        let hash = path.hash();
+
+        let begin = service
+            .begin_build(BeginBuildRequest {
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_name: "main".to_owned(),
+                revision: Some("deadbeef".to_owned()),
+            })
+            .await
+            .unwrap();
+
+        service
+            .register_paths(RegisterPathsRequest {
+                build_id: begin.build_id.clone(),
+                paths: vec![payload.clone()],
+            })
+            .await
+            .unwrap();
+
+        storage.insert(
+            payload.url.clone(),
+            BlobMetadata::new("application/octet-stream", Some(12), None, None),
+        );
+
+        service
+            .finalize_build(FinalizeBuildRequest {
+                build_id: begin.build_id.clone(),
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            db.path_has_object(&hash, &payload.url, PathObjectKind::Nar)
+                .await
+                .unwrap()
+        );
+
+        let records = db.list_storage_objects(&payload.url).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].metadata.content_length, Some(12));
+
+        let build_id = Uuid::parse_str(&begin.build_id).unwrap();
+        let build = db.get_build(build_id).await.unwrap().unwrap();
+        assert_eq!(build.status, BuildStatus::Finalized);
     }
 }

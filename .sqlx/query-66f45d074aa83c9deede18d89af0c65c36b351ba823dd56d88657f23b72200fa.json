@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            DELETE FROM project_upstreams\n            WHERE project_id = ?\n              AND upstream_id = (\n                  SELECT id\n                  FROM upstream_caches\n                  WHERE name = ?\n                  LIMIT 1\n              )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "66f45d074aa83c9deede18d89af0c65c36b351ba823dd56d88657f23b72200fa"
+}
