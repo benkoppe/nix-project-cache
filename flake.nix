@@ -25,7 +25,7 @@
 
         ./flake-parts/cargo.nix
         ./flake-parts/cache-db-tools.nix
-        ./flake-parts/pre-commit.nix
+        ./flake-parts/git-hooks.nix
         ./flake-parts/e2e-tests.nix
       ];
     };

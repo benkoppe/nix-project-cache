@@ -5,6 +5,9 @@ _: {
 
       settings = {
         src = ../.;
+
+        default_stages = [ "pre-push" ];
+
         hooks = {
           nixfmt.enable = true;
           rustfmt.enable = true;
