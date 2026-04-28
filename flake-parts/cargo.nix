@@ -91,6 +91,11 @@
             partitions = 1;
             partitionType = "count";
             cargoNextestPartitionsExtraArgs = "--no-tests=pass";
+
+            nativeBuildInputs = commonBuildArgs.nativeBuildInputs ++ [
+              # reqwest/rustls needs an explicit CA bundle in the Nix sandbox.
+              pkgs.cacert
+            ];
           }
         );
 
