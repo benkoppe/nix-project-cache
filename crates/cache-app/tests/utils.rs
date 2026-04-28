@@ -54,6 +54,7 @@ impl TestApp {
                 key_encryption_key: None,
                 storage_catalog: filesystem_storage_in(&temp_dir),
                 upstream_client,
+                cache_priority: 30,
             },
             Some(WRITE_TOKEN.to_owned()),
         );

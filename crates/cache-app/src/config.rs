@@ -35,6 +35,7 @@ pub enum AppMode {
 pub struct ServerConfig {
     pub bind_address: String,
     pub mode: AppMode,
+    pub priority: u32,
 }
 
 #[derive(Clone)]
@@ -81,6 +82,7 @@ struct RawAppConfig {
 struct RawServerConfig {
     bind_address: String,
     mode: String,
+    priority: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -121,6 +123,7 @@ impl Default for RawServerConfig {
         Self {
             bind_address: "127.0.0.1:8080".to_owned(),
             mode: "read-write".to_owned(),
+            priority: 30,
         }
     }
 }
@@ -203,6 +206,7 @@ impl TryFrom<RawServerConfig> for ServerConfig {
         Ok(Self {
             bind_address: raw.bind_address,
             mode,
+            priority: raw.priority,
         })
     }
 }

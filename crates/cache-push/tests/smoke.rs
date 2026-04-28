@@ -178,6 +178,7 @@ async fn cache_push_can_publish_and_read_back_path() -> Result<()> {
             mode: AppMode::ReadWrite,
             storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+            cache_priority: 30,
         },
         Some(WRITE_TOKEN.to_owned()),
     );
@@ -347,6 +348,7 @@ async fn cache_push_can_publish_with_github_oidc_token() -> Result<()> {
             mode: AppMode::ReadWrite,
             storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+            cache_priority: 30,
         },
         Arc::new(oidc_authorizer),
     );
@@ -477,6 +479,7 @@ async fn cache_ctl_setup_then_cache_push_with_github_oidc_works() -> Result<()> 
             mode: AppMode::ReadWrite,
             storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+            cache_priority: 30,
         },
         Arc::new(admin_and_oidc_authorizer(&oidc_server, audience)),
     );
@@ -620,6 +623,7 @@ async fn cache_ctl_token_create_then_cache_push_with_project_token_enforces_ref_
             mode: AppMode::ReadWrite,
             storage_catalog: filesystem_storage_in(&fixture.temp_dir),
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+            cache_priority: 30,
         },
         Some(WRITE_TOKEN.to_owned()),
     );

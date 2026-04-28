@@ -33,6 +33,7 @@ pub struct AppParts {
     pub key_encryption_key: Option<KeyEncryptionKey>,
     pub storage_catalog: StorageCatalog,
     pub upstream_client: Arc<dyn UpstreamCacheClient>,
+    pub cache_priority: u32,
 }
 
 pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
@@ -62,6 +63,7 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
             key_encryption_key: config.signing.project_key_encryption_key.clone(),
             storage_catalog,
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
+            cache_priority: config.server.priority,
         },
         authorizer,
     ))
@@ -80,6 +82,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
         key_encryption_key,
         storage_catalog,
         upstream_client,
+        cache_priority,
     } = parts;
 
     let renderer = cache_core::narinfo::NarInfoRenderer::new(store_dir.clone());
@@ -102,7 +105,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
         project_signing_keys,
     );
 
-    let read_state = ReadAppState::new(Arc::new(read_service), 30);
+    let read_state = ReadAppState::new(Arc::new(read_service), cache_priority);
     let read_routes = read_router(read_state);
 
     if mode == AppMode::ReadOnly {
