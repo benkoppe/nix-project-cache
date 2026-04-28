@@ -35,10 +35,18 @@ pub struct RegisterPathsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UploadMethod {
+    Proxy,
+    PresignedPut { url: String, expires_at: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequiredUpload {
     pub store_path_hash: String,
     pub object_path: String,
     pub content_type: String,
+    pub method: UploadMethod,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

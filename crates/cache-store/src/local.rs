@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
+use time::OffsetDateTime;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWriteExt as _};
 use uuid::Uuid;
@@ -13,12 +15,32 @@ use crate::blob::{BlobBytes, BlobMetadata};
 
 pub type UploadReader = Pin<Box<dyn AsyncRead + Send>>;
 
+#[derive(Debug, Clone)]
+pub struct PresignedPutUrl {
+    pub url: String,
+    pub expires_at: OffsetDateTime,
+}
+
 #[async_trait]
 pub trait CacheStorage: Send + Sync + 'static {
-    async fn contains(&self, object_path: &str) -> Result<bool>;
+    async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>>;
+
+    async fn contains(&self, object_path: &str) -> Result<bool> {
+        Ok(self.head(object_path).await?.is_some())
+    }
+
     async fn get_bytes(&self, object_path: &str) -> Result<Option<BlobBytes>>;
     async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> Result<()>;
     async fn put_stream(&self, object_path: &str, reader: UploadReader) -> Result<u64>;
+
+    async fn presigned_put_url(
+        &self,
+        _object_path: &str,
+        _expires_in: Duration,
+    ) -> Result<Option<PresignedPutUrl>> {
+        Ok(None)
+    }
+
     async fn delete(&self, object_path: &str) -> Result<()>;
 }
 
@@ -90,12 +112,18 @@ impl FilesystemStorage {
 
 #[async_trait]
 impl CacheStorage for FilesystemStorage {
-    async fn contains(&self, object_path: &str) -> Result<bool> {
+    async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
         let path = self.resolve_object_path(object_path)?;
 
         match fs::metadata(&path).await {
-            Ok(metadata) => Ok(metadata.is_file()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Ok(metadata) if metadata.is_file() => Ok(Some(BlobMetadata::new(
+                "application/octet-stream",
+                Some(metadata.len()),
+                None,
+                None,
+            ))),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error)
                 .with_context(|| format!("reading filesystem metadata for {}", path.display())),
         }

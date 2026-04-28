@@ -135,6 +135,31 @@ impl CacheClient {
         self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
     }
 
+    pub async fn upload_presigned_put_file(
+        &self,
+        url: &str,
+        file: tokio::fs::File,
+        content_length: u64,
+        content_type: &str,
+    ) -> Result<(), CacheClientError> {
+        let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+
+        let response = self
+            .http_client
+            .put(url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header(reqwest::header::CONTENT_LENGTH, content_length)
+            .body(body)
+            .send()
+            .await?;
+
+        self.expect_empty(
+            response,
+            &[StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT],
+        )
+        .await
+    }
+
     pub async fn finalize_build(
         &self,
         build_id: &str,
@@ -604,6 +629,7 @@ mod tests {
                     store_path_hash: path.hash_str(),
                     object_path: path.url().to_owned(),
                     content_type: "application/octet-stream".to_owned(),
+                    method: cache_api::UploadMethod::Proxy,
                 }],
             }),
         )

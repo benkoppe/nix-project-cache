@@ -20,7 +20,7 @@ use cache_read::{
 };
 use cache_store::StorageCatalog;
 use cache_store::upstream::{ReqwestUpstreamCacheClient, UpstreamCacheClient};
-use cache_write::{AuthorizationService, WriteAppState, write_router};
+use cache_write::{AuthorizationService, DbAccessTokenAuthorizer, WriteAppState, write_router};
 
 pub use config::{AppConfig, AppMode};
 pub use storage::{S3StorageConfig, StorageConfig};
@@ -112,13 +112,17 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
     let ingest_service = IngestService::new(
         db.clone(),
         store_dir,
-        Arc::new(object_store),
         storage_catalog.clone(),
         upstream_client,
     );
 
     let gc_service = GcService::new(db.clone(), storage_catalog.clone());
-    let authorization_service = AuthorizationService::new(db.clone(), authorizer);
+
+    let mut write_authorizer = ChainAuthorizer::new();
+    write_authorizer.push(authorizer);
+    write_authorizer.push(Arc::new(DbAccessTokenAuthorizer::new(db.clone())));
+
+    let authorization_service = AuthorizationService::new(db.clone(), Arc::new(write_authorizer));
 
     let write_state = WriteAppState::new(
         db,
@@ -135,6 +139,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
 
 fn build_default_authorizer(config: &AppConfig) -> anyhow::Result<Arc<dyn Authorizer>> {
     let mut chain = ChainAuthorizer::new();
+
     chain.push(Arc::new(StaticTokenAuthorizer::new(
         config.auth.write_token.clone(),
     )));

@@ -3,7 +3,9 @@ pub mod handlers;
 pub mod router;
 pub mod state;
 
-pub use authz::{AuthorizationService, AuthorizationServiceError, AuthorizedPrincipal};
+pub use authz::{
+    AuthorizationService, AuthorizationServiceError, AuthorizedPrincipal, DbAccessTokenAuthorizer,
+};
 pub use router::write_router;
 pub use state::WriteAppState;
 
@@ -27,13 +29,12 @@ mod tests {
         RunGcResponse, UpsertProjectOidcIdentityRequest,
     };
     use cache_auth::{
-        AuthError, AuthenticatedIdentity, Authorizer, OidcAuthorizer, OidcConfig,
+        AuthError, AuthenticatedIdentity, Authorizer, ChainAuthorizer, OidcAuthorizer, OidcConfig,
         OidcProviderConfig, StaticOidcHttpClient, StaticTokenAuthorizer,
     };
     use cache_core::nix::StoreDir;
     use cache_db::SqliteDatabase;
     use cache_ingest::{GcService, IngestService};
-    use cache_store::local::InMemoryObjectStore;
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
         EXAMPLE_PROJECT_SLUG, TestDatabase, TestOidcIssuer, example_project, filesystem_storage_in,
@@ -83,13 +84,16 @@ mod tests {
         let ingest_service = IngestService::new(
             fixture.db.clone(),
             StoreDir::default(),
-            Arc::new(InMemoryObjectStore::new()),
             storage_catalog.clone(),
             Arc::new(InMemoryUpstreamCacheClient::new()),
         );
         let gc_service = GcService::new(fixture.db.clone(), storage_catalog.clone());
 
-        let authorization_service = AuthorizationService::new(fixture.db.clone(), authorizer);
+        let mut chain = ChainAuthorizer::new();
+        chain.push(authorizer);
+        chain.push(Arc::new(DbAccessTokenAuthorizer::new(fixture.db.clone())));
+
+        let authorization_service = AuthorizationService::new(fixture.db.clone(), Arc::new(chain));
 
         let state = WriteAppState::new(
             fixture.db.clone(),

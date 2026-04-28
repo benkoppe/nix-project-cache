@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use async_compression::tokio::bufread::ZstdEncoder;
 use bytes::Bytes;
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncReadExt as _, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -211,6 +211,84 @@ pub async fn compressed_nar_reader_for_path(path: &str) -> Result<BoxAsyncRead> 
     });
 
     Ok(Box::pin(StreamReader::new(ReceiverStream::new(receiver))))
+}
+
+pub struct CompressedNarFile {
+    temp_file: tempfile::NamedTempFile,
+    size: u64,
+}
+
+impl CompressedNarFile {
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub async fn open(&self) -> Result<tokio::fs::File> {
+        tokio::fs::File::open(self.temp_file.path())
+            .await
+            .with_context(|| {
+                format!(
+                    "opening compressed NAR temp file {}",
+                    self.temp_file.path().display()
+                )
+            })
+    }
+}
+
+pub async fn compressed_nar_file_for_path(path: &str) -> Result<CompressedNarFile> {
+    let mut child = Command::new("nix-store")
+        .arg("--dump")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawning nix-store --dump for {}", path))?;
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("nix-store --dump did not provide stdout"))?;
+
+    let temp_file =
+        tempfile::NamedTempFile::new().context("creating compressed NAR temporary file")?;
+    let temp_path = temp_file.path().to_owned();
+
+    let file = tokio::fs::File::create(&temp_path)
+        .await
+        .with_context(|| format!("creating compressed NAR temp file {}", temp_path.display()))?;
+
+    let mut encoder = async_compression::tokio::write::ZstdEncoder::new(file);
+
+    tokio::io::copy(&mut stdout, &mut encoder)
+        .await
+        .with_context(|| format!("compressing NAR for {}", path))?;
+
+    encoder
+        .shutdown()
+        .await
+        .with_context(|| format!("finalizing zstd stream for {}", path))?;
+
+    match child.wait().await {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            anyhow::bail!(
+                "nix-store --dump exited with status {} for {}",
+                status,
+                path
+            );
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("waiting for nix-store --dump for {}", path));
+        }
+    }
+
+    let size = tokio::fs::metadata(&temp_path)
+        .await
+        .with_context(|| format!("reading compressed NAR metadata {}", temp_path.display()))?
+        .len();
+
+    Ok(CompressedNarFile { temp_file, size })
 }
 
 #[cfg(test)]

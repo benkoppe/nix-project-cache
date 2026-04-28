@@ -1,16 +1,28 @@
+use std::time::Duration;
+
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
-use aws_credential_types::Credentials;
+use aws_credential_types::Credentials as AwsCredentials;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{
     Builder as S3ConfigBuilder, Region, RequestChecksumCalculation, ResponseChecksumValidation,
 };
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
+use rusty_s3::{Bucket, Credentials as RustyCredentials, S3Action as _, UrlStyle};
+use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt as _;
 
-use crate::blob::BlobBytes;
-use crate::local::{CacheStorage, UploadReader};
+use crate::blob::{BlobBytes, BlobMetadata};
+use crate::local::{CacheStorage, PresignedPutUrl, UploadReader};
+
+const PRESIGNED_PUT_TTL_SKEW_SECONDS: i64 = 0;
+
+#[derive(Clone)]
+struct S3Presigner {
+    bucket: Bucket,
+    credentials: RustyCredentials,
+}
 
 #[derive(Debug, Clone)]
 pub struct S3StorageConfig {
@@ -28,13 +40,14 @@ pub struct S3Storage {
     client: Client,
     bucket: String,
     prefix: Option<String>,
+    presigner: Option<S3Presigner>,
 }
 
 impl S3Storage {
     pub fn new(config: S3StorageConfig) -> Result<Self> {
-        let credentials = Credentials::new(
-            config.access_key_id,
-            config.secret_access_key,
+        let credentials = AwsCredentials::new(
+            config.access_key_id.clone(),
+            config.secret_access_key.clone(),
             None,
             None,
             "cache-store-s3",
@@ -42,18 +55,44 @@ impl S3Storage {
 
         let s3_config = S3ConfigBuilder::new()
             .behavior_version_latest()
-            .region(Region::new(config.region))
+            .region(Region::new(config.region.clone()))
             .credentials_provider(credentials)
-            .endpoint_url(config.endpoint)
+            .endpoint_url(config.endpoint.clone())
             .force_path_style(config.force_path_style)
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
             .build();
 
+        let endpoint: url::Url = config
+            .endpoint
+            .parse()
+            .with_context(|| format!("parsing S3 endpoint {}", config.endpoint))?;
+
+        let url_style = if config.force_path_style {
+            UrlStyle::Path
+        } else {
+            UrlStyle::VirtualHost
+        };
+
+        let presign_bucket = Bucket::new(
+            endpoint,
+            url_style,
+            config.bucket.clone(),
+            config.region.clone(),
+        )
+        .map_err(anyhow::Error::new)
+        .context("building rusty-s3 bucket")?;
+
+        let presigner = S3Presigner {
+            bucket: presign_bucket,
+            credentials: RustyCredentials::new(config.access_key_id, config.secret_access_key),
+        };
+
         Ok(Self {
             client: Client::from_conf(s3_config),
             bucket: config.bucket,
             prefix: normalize_prefix(config.prefix)?,
+            presigner: Some(presigner),
         })
     }
 
@@ -66,6 +105,7 @@ impl S3Storage {
             client,
             bucket: bucket.into(),
             prefix: normalize_prefix(prefix)?,
+            presigner: None,
         })
     }
 
@@ -120,10 +160,10 @@ where
 
 #[async_trait]
 impl CacheStorage for S3Storage {
-    async fn contains(&self, object_path: &str) -> Result<bool> {
+    async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
         let key = self.object_key(object_path)?;
 
-        match self
+        let response = match self
             .client
             .head_object()
             .bucket(&self.bucket)
@@ -131,11 +171,27 @@ impl CacheStorage for S3Storage {
             .send()
             .await
         {
-            Ok(_) => Ok(true),
-            Err(error) if is_not_found(&error) => Ok(false),
-            Err(error) => Err(error)
-                .with_context(|| format!("checking s3 object s3://{}/{}", self.bucket, key)),
-        }
+            Ok(response) => response,
+            Err(error) if is_not_found(&error) => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("checking s3 object s3://{}/{}", self.bucket, key));
+            }
+        };
+
+        let content_length = response
+            .content_length()
+            .and_then(|value| u64::try_from(value).ok());
+
+        Ok(Some(BlobMetadata::new(
+            response
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_owned(),
+            content_length,
+            response.e_tag().map(str::to_owned),
+            None,
+        )))
     }
 
     async fn get_bytes(&self, object_path: &str) -> Result<Option<BlobBytes>> {
@@ -223,6 +279,30 @@ impl CacheStorage for S3Storage {
             .with_context(|| format!("streaming S3 object s3://{}/{}", self.bucket, key))?;
 
         Ok(written)
+    }
+
+    async fn presigned_put_url(
+        &self,
+        object_path: &str,
+        expires_in: Duration,
+    ) -> Result<Option<PresignedPutUrl>> {
+        let Some(presigner) = &self.presigner else {
+            return Ok(None);
+        };
+
+        let key = self.object_key(object_path)?;
+        let action = presigner
+            .bucket
+            .put_object(Some(&presigner.credentials), &key);
+        let url = action.sign(expires_in);
+
+        let ttl = time::Duration::try_from(expires_in).context("converting presigned put ttl")?
+            - time::Duration::seconds(PRESIGNED_PUT_TTL_SKEW_SECONDS);
+
+        Ok(Some(PresignedPutUrl {
+            url: url.to_string(),
+            expires_at: OffsetDateTime::now_utc() + ttl,
+        }))
     }
 
     async fn delete(&self, object_path: &str) -> Result<()> {

@@ -1,10 +1,10 @@
 use anyhow::{Context as _, Result};
 
-use cache_api::RequiredUpload;
+use cache_api::{RequiredUpload, UploadMethod};
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::StorePathHash;
-use cache_store::ObjectStore;
+use cache_store::CacheStorage;
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
 
 #[derive(Debug, Clone)]
@@ -15,17 +15,18 @@ pub struct PlannedUpload {
 }
 
 impl PlannedUpload {
-    pub fn to_api_required_upload(&self) -> RequiredUpload {
+    pub fn to_api_required_upload(&self, method: UploadMethod) -> RequiredUpload {
         RequiredUpload {
             store_path_hash: self.store_path_hash.as_str().to_owned(),
             object_path: self.object_path.clone(),
             content_type: self.content_type.clone(),
+            method,
         }
     }
 }
 
 pub async fn plan_required_uploads(
-    object_store: &dyn ObjectStore,
+    storage: &dyn CacheStorage,
     upstream_client: &dyn UpstreamCacheClient,
     upstreams: &[UpstreamCache],
     narinfos: &[NarInfo],
@@ -43,7 +44,7 @@ pub async fn plan_required_uploads(
             _ => continue,
         }
 
-        if object_store.head(&object_path).await?.is_some() {
+        if storage.head(&object_path).await?.is_some() {
             continue;
         }
 

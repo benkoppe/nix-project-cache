@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use uuid::Uuid;
 
 use cache_api::{
     BeginBuildRequest, BeginBuildResponse, FinalizeBuildRequest, FinalizeBuildResponse,
-    RegisterPathsRequest, RegisterPathsResponse,
+    RegisterPathsRequest, RegisterPathsResponse, UploadMethod,
 };
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
@@ -16,15 +17,16 @@ use cache_core::validation::validate_publish_narinfo;
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
-use cache_store::{ObjectStore, StorageCatalog, UploadReader};
+use cache_store::{StorageCatalog, UploadReader};
 
 use crate::planner::plan_required_uploads;
+
+const PRESIGNED_PUT_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct IngestService {
     db: SqliteDatabase,
     store_dir: StoreDir,
-    object_store: Arc<dyn ObjectStore>,
     storage_catalog: StorageCatalog,
     upstream_client: Arc<dyn UpstreamCacheClient>,
 }
@@ -33,14 +35,12 @@ impl IngestService {
     pub fn new(
         db: SqliteDatabase,
         store_dir: StoreDir,
-        object_store: Arc<dyn ObjectStore>,
         storage_catalog: StorageCatalog,
         upstream_client: Arc<dyn UpstreamCacheClient>,
     ) -> Self {
         Self {
             db,
             store_dir,
-            object_store,
             storage_catalog,
             upstream_client,
         }
@@ -89,10 +89,15 @@ impl IngestService {
             narinfos.push(narinfo);
         }
 
+        let storage_id = self
+            .storage_id_for_project(&build_context.project_slug)
+            .await?;
+        let storage = self.storage_catalog.storage(&storage_id)?;
+
         let upstreams = self.project_upstreams(&build_context.project_slug).await?;
 
         let planned = plan_required_uploads(
-            self.object_store.as_ref(),
+            storage.as_ref(),
             self.upstream_client.as_ref(),
             &upstreams,
             &narinfos,
@@ -109,19 +114,34 @@ impl IngestService {
                 _ => continue,
             }
 
-            if self.object_store.head(&object_path).await?.is_some() {
+            if let Some(metadata) = storage.head(&object_path).await? {
+                self.db
+                    .upsert_storage_object(&storage_id, &object_path, &metadata)
+                    .await?;
                 self.db
                     .link_path_object(&store_path_hash, &object_path, PathObjectKind::Nar)
                     .await?;
             }
         }
 
-        Ok(RegisterPathsResponse {
-            required_uploads: planned
-                .iter()
-                .map(|planned| planned.to_api_required_upload())
-                .collect(),
-        })
+        let mut required_uploads = Vec::with_capacity(planned.len());
+
+        for planned_upload in planned {
+            let method = match storage
+                .presigned_put_url(&planned_upload.object_path, PRESIGNED_PUT_TTL)
+                .await?
+            {
+                Some(url) => UploadMethod::PresignedPut {
+                    url: url.url,
+                    expires_at: url.expires_at.to_string(),
+                },
+                None => UploadMethod::Proxy,
+            };
+
+            required_uploads.push(planned_upload.to_api_required_upload(method));
+        }
+
+        Ok(RegisterPathsResponse { required_uploads })
     }
 
     pub async fn upload_object(
@@ -149,9 +169,9 @@ impl IngestService {
             _ => return Err(anyhow!("invalid upload object path {}", object_path)),
         }
 
-        let Some(expected_object_path) = self
+        let Some(narinfo) = self
             .db
-            .get_build_path_nar_object_path(build_id, store_path_hash)
+            .get_build_path_narinfo(build_id, store_path_hash)
             .await?
         else {
             return Err(anyhow!(
@@ -160,6 +180,8 @@ impl IngestService {
                 store_path_hash.as_str()
             ));
         };
+
+        let expected_object_path = narinfo.url.as_str();
 
         if object_path != expected_object_path {
             return Err(anyhow!(
@@ -219,14 +241,19 @@ impl IngestService {
 
         let upstreams = self.project_upstreams(&build_context.project_slug).await?;
 
-        for (store_path_hash, object_path) in build_paths {
-            let locally_available = self
-                .db
-                .path_has_object(&store_path_hash, &object_path, PathObjectKind::Nar)
-                .await?
-                && self.object_store.head(&object_path).await?.is_some();
+        let storage_id = self
+            .storage_id_for_project(&build_context.project_slug)
+            .await?;
+        let storage = self.storage_catalog.storage(&storage_id)?;
 
-            if locally_available {
+        for (store_path_hash, object_path) in build_paths {
+            if let Some(metadata) = storage.head(&object_path).await? {
+                self.db
+                    .upsert_storage_object(&storage_id, &object_path, &metadata)
+                    .await?;
+                self.db
+                    .link_path_object(&store_path_hash, &object_path, PathObjectKind::Nar)
+                    .await?;
                 continue;
             }
 
@@ -301,7 +328,6 @@ mod tests {
     use cache_core::nix::StoreDir;
     use cache_core::storage::PathObjectKind;
     use cache_db::{BuildStatus, SqliteDatabase};
-    use cache_read::DbBackedObjectStore;
     use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::upstream::InMemoryUpstreamCacheClient;
     use cache_test_utils::{
@@ -318,12 +344,10 @@ mod tests {
         fixture.insert_example_project().await.unwrap();
 
         let storage_catalog = filesystem_storage_in(&fixture.temp_dir);
-        let object_store = DbBackedObjectStore::new(fixture.db.clone(), storage_catalog.clone());
 
         let service = IngestService::new(
             fixture.db.clone(),
             StoreDir::default(),
-            Arc::new(object_store),
             storage_catalog,
             Arc::new(upstream_client),
         );

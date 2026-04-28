@@ -11,6 +11,7 @@ cache-store = { path = "../cache-store" }
 cache-db = { path = "../cache-db" }
 cache-ingest = { path = "../cache-ingest" }
 thiserror.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
@@ -25,7 +26,6 @@ time.workspace = true
 [dev-dependencies]
 cache-test-utils = { path = "../cache-test-utils" }
 cache-store = { path = "../cache-store" }
-async-trait.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

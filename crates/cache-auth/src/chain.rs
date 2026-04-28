@@ -53,12 +53,12 @@ impl Authorizer for ChainAuthorizer {
 
         if !saw_enabled {
             Err(AuthError::Disabled)
+        } else if let Some(message) = unavailable {
+            Err(AuthError::Unavailable(message))
         } else if saw_invalid {
             Err(AuthError::InvalidToken)
         } else if saw_missing {
             Err(AuthError::MissingToken)
-        } else if let Some(message) = unavailable {
-            Err(AuthError::Unavailable(message))
         } else {
             Err(AuthError::Disabled)
         }

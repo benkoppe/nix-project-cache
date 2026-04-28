@@ -6,7 +6,10 @@ pub mod upstream;
 
 pub use blob::{BlobBytes, BlobMetadata};
 pub use catalog::StorageCatalog;
-pub use local::{CacheStorage, FilesystemStorage, InMemoryObjectStore, ObjectStore, UploadReader};
+pub use local::{
+    CacheStorage, FilesystemStorage, InMemoryObjectStore, ObjectStore, PresignedPutUrl,
+    UploadReader,
+};
 pub use s3::{S3Storage, S3StorageConfig};
 pub use upstream::{
     InMemoryUpstreamCacheClient, ReqwestUpstreamCacheClient, UpstreamCache, UpstreamCacheClient,

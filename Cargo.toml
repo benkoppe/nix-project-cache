@@ -21,6 +21,8 @@ metadata.crane.name = "nix-project-cache"
 [workspace.dependencies]
 aws-credential-types = "1"
 aws-sdk-s3 = "1"
+rusty-s3 = "0.9"
+url = "2.5"
 axum = { version = "0.8", features = ["http1", "tokio"] }
 async-trait = "0.1"
 http-body-util = "0.1"
@@ -66,7 +68,13 @@ zstd = "0.13"
 regex = "1.12"
 wildmatch = "2"
 clap = { version = "4.6", features = ["derive", "env"] }
-async-compression = { version = "0.4", features = ["tokio", "zstd"] }
+async-compression = { version = "0.4", features = [
+  "tokio",
+  "zstd",
+  "xz",
+  "bzip2",
+] }
+subtle = "2"
 time = { version = "0.3", features = [
   "serde",
   "formatting",

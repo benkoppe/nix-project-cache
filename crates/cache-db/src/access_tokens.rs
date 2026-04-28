@@ -233,6 +233,45 @@ impl SqliteDatabase {
             .map(AccessTokenLookupRow::into_record)
             .collect()
     }
+
+    pub async fn list_active_access_token_records_by_id(
+        &self,
+        token_id: &str,
+    ) -> Result<Vec<AccessTokenRecord>> {
+        let now = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .context("formatting current time")?;
+
+        let rows = sqlx::query_as!(
+            AccessTokenLookupRow,
+            r#"
+            SELECT
+                t.id,
+                t.name,
+                p.slug AS project_slug,
+                r.ref_pattern,
+                t.created_at,
+                t.expires_at,
+                t.revoked_at
+            FROM access_tokens t
+            JOIN projects p ON p.id = t.project_id
+            JOIN access_token_ref_patterns r ON r.token_id = t.id
+            WHERE t.id = ?
+            AND t.revoked_at IS NULL
+            AND (t.expires_at IS NULL OR t.expires_at > ?)
+            ORDER BY r.ref_pattern ASC
+            "#,
+            token_id,
+            now,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("looking up active access token by id")?;
+
+        rows.into_iter()
+            .map(AccessTokenLookupRow::into_record)
+            .collect()
+    }
 }
 
 pub fn hash_access_token(token: &str) -> String {

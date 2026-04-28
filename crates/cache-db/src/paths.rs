@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use uuid::Uuid;
 
 use cache_core::narinfo::NarInfo;
 use cache_core::nix::{NixContentAddress, NixHash, StorePathHash};
@@ -30,9 +31,9 @@ impl SqliteDatabase {
             .await
             .context("beginning path_info transaction")?;
 
-        sqlx::query!(
+        let result = sqlx::query!(
             r#"
-            INSERT INTO path_infos (
+            INSERT OR IGNORE INTO path_infos (
                 store_path_hash,
                 store_path,
                 url,
@@ -43,14 +44,6 @@ impl SqliteDatabase {
                 ca
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            ON CONFLICT(store_path_hash) DO UPDATE SET
-                store_path = excluded.store_path,
-                url = excluded.url,
-                compression = excluded.compression,
-                nar_hash = excluded.nar_hash,
-                nar_size = excluded.nar_size,
-                deriver = excluded.deriver,
-                ca = excluded.ca
             "#,
             store_path_hash_text,
             store_path,
@@ -63,18 +56,21 @@ impl SqliteDatabase {
         )
         .execute(&mut *tx)
         .await
-        .context("upserting path_info row")?;
+        .context("inserting path_info row")?;
 
-        sqlx::query!(
-            r#"
-            DELETE FROM path_references
-            WHERE store_path_hash = ?
-            "#,
-            store_path_hash_text,
-        )
-        .execute(&mut *tx)
-        .await
-        .context("clearing existing path references")?;
+        if result.rows_affected() == 0 {
+            tx.commit()
+                .await
+                .context("committing path_info validation transaction")?;
+
+            let existing = self
+                .get_path_info_by_hash(&store_path_hash)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("path_info disappeared during validation"))?;
+
+            ensure_compatible_path_info(&existing, narinfo)?;
+            return Ok(());
+        }
 
         for (ordinal, reference) in narinfo.references.iter().enumerate() {
             let ordinal_i64 = i64::try_from(ordinal).context("converting reference ordinal")?;
@@ -87,23 +83,12 @@ impl SqliteDatabase {
                 "#,
                 store_path_hash_text,
                 reference_text,
-                ordinal_i64,
+                ordinal_i64
             )
             .execute(&mut *tx)
             .await
             .context("inserting path reference")?;
         }
-
-        sqlx::query!(
-            r#"
-            DELETE FROM path_signatures
-            WHERE store_path_hash = ?
-            "#,
-            store_path_hash_text
-        )
-        .execute(&mut *tx)
-        .await
-        .context("clearing existing path signatures")?;
 
         for (ordinal, signature) in narinfo.signatures.iter().enumerate() {
             let ordinal_i64 = i64::try_from(ordinal).context("converting signature ordinal")?;
@@ -126,7 +111,6 @@ impl SqliteDatabase {
         tx.commit()
             .await
             .context("committing path_info transaction")?;
-
         Ok(())
     }
 
@@ -210,6 +194,79 @@ impl SqliteDatabase {
         self.inflate_narinfo(row).await.map(Some)
     }
 
+    pub async fn get_build_path_narinfo(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+    ) -> Result<Option<NarInfo>> {
+        let build_id_text = build_id.to_string();
+        let store_path_hash_text = store_path_hash.as_str();
+
+        let row = sqlx::query_as!(
+            PathInfoLookupRow,
+            r#"
+             SELECT
+                pi.store_path_hash,
+                pi.store_path,
+                pi.url,
+                pi.compression,
+                pi.nar_hash,
+                pi.nar_size,
+                pi.deriver,
+                pi.ca
+            FROM build_paths bp
+            JOIN path_infos pi ON pi.store_path_hash = bp.store_path_hash
+            WHERE bp.build_id = ?
+            AND bp.store_path_hash = ?
+            LIMIT 1
+            "#,
+            build_id_text,
+            store_path_hash_text
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching build path narinfo")?;
+
+        match row {
+            Some(row) => self.inflate_narinfo(row).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_path_info_by_hash(
+        &self,
+        store_path_hash: &StorePathHash,
+    ) -> Result<Option<NarInfo>> {
+        let store_path_hash_text = store_path_hash.as_str();
+
+        let row = sqlx::query_as!(
+            PathInfoLookupRow,
+            r#"
+            SELECT
+                store_path_hash,
+                store_path,
+                url,
+                compression,
+                nar_hash,
+                nar_size,
+                deriver,
+                ca
+            FROM path_infos
+            WHERE store_path_hash = ?
+            LIMIT 1
+            "#,
+            store_path_hash_text
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("fetching path_info by hash")?;
+
+        match row {
+            Some(row) => self.inflate_narinfo(row).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
     async fn inflate_narinfo(&self, path_info: PathInfoLookupRow) -> Result<NarInfo> {
         let store_path_hash_text = path_info.store_path_hash.as_str();
 
@@ -257,5 +314,39 @@ impl SqliteDatabase {
             signatures: signatures.into_iter().map(|row| row.signature).collect(),
             ca: path_info.ca.map(NixContentAddress::Raw),
         })
+    }
+}
+
+fn ensure_compatible_path_info(existing: &NarInfo, incoming: &NarInfo) -> Result<()> {
+    let existing_ca = existing
+        .ca
+        .as_ref()
+        .map(NixContentAddress::format_for_narinfo);
+    let incoming_ca = incoming
+        .ca
+        .as_ref()
+        .map(NixContentAddress::format_for_narinfo);
+
+    let mut existing_refs = existing.references.clone();
+    let mut incoming_refs = incoming.references.clone();
+    existing_refs.sort();
+    incoming_refs.sort();
+
+    let compatible = existing.store_path == incoming.store_path
+        && existing.url == incoming.url
+        && existing.compression == incoming.compression
+        && existing.normalized_nar_hash()? == incoming.normalized_nar_hash()?
+        && existing.nar_size == incoming.nar_size
+        && existing_refs == incoming_refs
+        && existing.deriver == incoming.deriver
+        && existing_ca == incoming_ca;
+
+    if compatible {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "conflicting narinfo metadata for store path {}",
+            incoming.store_path
+        ))
     }
 }

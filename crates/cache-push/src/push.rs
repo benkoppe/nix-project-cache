@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::info;
 
-use cache_api::BeginBuildRequest;
+use cache_api::{BeginBuildRequest, UploadMethod};
 use cache_client::CacheClient;
 use cache_core::nix::StorePathHash;
 use cache_core::project::ProjectSlug;
@@ -94,6 +94,50 @@ pub async fn push_paths(client: &CacheClient, options: PushOptions) -> Result<()
                         required_upload.store_path_hash
                     )
                 })?;
+
+            match required_upload.method.clone() {
+                UploadMethod::Proxy => {
+                    let reader = nix::compressed_nar_reader_for_path(&store_path)
+                        .await
+                        .with_context(|| format!("streaming NAR for {}", store_path))?;
+
+                    client
+                        .upload_object_reader(
+                            &build_id,
+                            &store_path_hash,
+                            &required_upload.object_path,
+                            reader,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "uploading {} for {}",
+                                required_upload.object_path, store_path
+                            )
+                        })?;
+                }
+                UploadMethod::PresignedPut { url, .. } => {
+                    let compressed = nix::compressed_nar_file_for_path(&store_path)
+                        .await
+                        .with_context(|| format!("compressing NAR for {}", store_path))?;
+                    let file = compressed.open().await?;
+
+                    client
+                        .upload_presigned_put_file(
+                            &url,
+                            file,
+                            compressed.size(),
+                            &required_upload.content_type,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "uploading {} directly for {}",
+                                required_upload.object_path, store_path
+                            )
+                        })?;
+                }
+            }
 
             let reader = nix::compressed_nar_reader_for_path(&store_path)
                 .await
