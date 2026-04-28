@@ -139,25 +139,6 @@ pub async fn push_paths(client: &CacheClient, options: PushOptions) -> Result<()
                 }
             }
 
-            let reader = nix::compressed_nar_reader_for_path(&store_path)
-                .await
-                .with_context(|| format!("streaming NAR for {}", store_path))?;
-
-            client
-                .upload_object_reader(
-                    &build_id,
-                    &store_path_hash,
-                    &required_upload.object_path,
-                    reader,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "uploading {} for {}",
-                        required_upload.object_path, store_path
-                    )
-                })?;
-
             Ok::<(), anyhow::Error>(())
         });
     }
