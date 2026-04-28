@@ -1,0 +1,25 @@
+name: Rust Checks
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  rust-nix-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Check formatting
+        run: nix build .#checks.x86_64-linux.rust-fmt -L
+
+      - name: Run clippy
+        run: nix build .#checks.x86_64-linux.clippy -L
+
+      - name: Run Rust tests
+        run: nix build .#checks.x86_64-linux.rust-tests -L
+
+      - name: Build docs
+        run: nix build .#checks.x86_64-linux.cargo-doc -L

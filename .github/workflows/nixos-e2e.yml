@@ -1,0 +1,21 @@
+name: NixOS E2E
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+jobs:
+  nix-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Run filesystem e2e
+        run: nix build .#checks.x86_64-linux.e2e-cache-substituter-fs -L
+
+      - name: Run S3 e2e
+        run: nix build .#checks.x86_64-linux.e2e-cache-substituter-s3 -L
