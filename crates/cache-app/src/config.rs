@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use figment::{
     Figment,
-    providers::{Env, Format, Serialized, Toml},
+    providers::{Env, Format, Toml},
 };
 use serde::{Deserialize, Serialize};
 
@@ -151,7 +151,7 @@ impl Default for RawLoggingConfig {
 
 impl AppConfig {
     pub fn load(config_path: Option<&Path>) -> Result<Self> {
-        let mut figment = Figment::new().merge(Serialized::defaults(RawAppConfig::default()));
+        let mut figment = Figment::new();
 
         if let Some(path) = config_path {
             figment = figment.merge(Toml::file(path));
@@ -297,4 +297,54 @@ fn non_empty_option(value: Option<String>) -> Option<String> {
 
 fn non_empty_path(path: Option<PathBuf>) -> Option<PathBuf> {
     path.filter(|path| !path.as_os_str().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use figment::{
+        Figment,
+        providers::{Format, Toml},
+    };
+
+    use crate::storage::StorageBackendConfig;
+
+    use super::AppConfig;
+
+    #[test]
+    fn default_config_uses_filesystem_storage() {
+        let config = AppConfig::from_figment(Figment::new()).unwrap();
+
+        let backend = config
+            .storage
+            .backends
+            .get(&config.storage.default_storage_id)
+            .unwrap();
+
+        assert!(matches!(backend, StorageBackendConfig::Filesystem(_)));
+    }
+
+    #[test]
+    fn s3_storage_config_does_not_inherit_default_filesystem_root() {
+        let toml = r#"
+            [storage.backends.main]
+            type = "s3"
+            endpoint = "http://127.0.0.1:9000"
+            bucket = "nix-project-cache-test"
+            region = "us-east-1"
+            access_key_id = "minioadmin"
+            secret_access_key = "minioadmin"
+            force_path_style = true
+            prefix = "objects"
+        "#;
+
+        let config = AppConfig::from_figment(Figment::new().merge(Toml::string(toml))).unwrap();
+
+        let backend = config
+            .storage
+            .backends
+            .get(&config.storage.default_storage_id)
+            .unwrap();
+
+        assert!(matches!(backend, StorageBackendConfig::S3(_)));
+    }
 }
