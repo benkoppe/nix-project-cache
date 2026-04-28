@@ -1,0 +1,1 @@
+# nix-project-cache
