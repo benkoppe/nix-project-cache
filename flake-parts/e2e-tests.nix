@@ -268,8 +268,10 @@
 
           appConfig = {
             storage = {
-              object_root = "${stateDir}/objects";
-              write_backend = "fs";
+              backends.main = {
+                type = "filesystem";
+                root = "${stateDir}/objects";
+              };
             };
           };
         };
@@ -279,9 +281,8 @@
 
           appConfig = {
             storage = {
-              write_backend = "s3";
-
-              s3 = {
+              backends.main = {
+                type = "s3";
                 endpoint = s3Endpoint;
                 bucket = s3Bucket;
                 region = "us-east-1";
