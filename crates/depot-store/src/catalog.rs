@@ -5,18 +5,18 @@ use anyhow::{Result, anyhow};
 
 use depot_core::storage::StorageId;
 
-use crate::local::CacheStorage;
+use crate::local::DepotStorage;
 
 #[derive(Clone)]
 pub struct StorageCatalog {
     default_storage_id: StorageId,
-    backends: Arc<BTreeMap<StorageId, Arc<dyn CacheStorage>>>,
+    backends: Arc<BTreeMap<StorageId, Arc<dyn DepotStorage>>>,
 }
 
 impl StorageCatalog {
     pub fn new(
         default_storage_id: StorageId,
-        backends: BTreeMap<StorageId, Arc<dyn CacheStorage>>,
+        backends: BTreeMap<StorageId, Arc<dyn DepotStorage>>,
     ) -> Result<Self> {
         if backends.is_empty() {
             return Err(anyhow!("at least one storage backend must be configured"));
@@ -55,14 +55,14 @@ impl StorageCatalog {
         self.backends.len() == 1
     }
 
-    pub fn storage(&self, storage_id: &StorageId) -> Result<Arc<dyn CacheStorage>> {
+    pub fn storage(&self, storage_id: &StorageId) -> Result<Arc<dyn DepotStorage>> {
         self.backends
             .get(storage_id)
             .cloned()
             .ok_or_else(|| anyhow!("storage backend {} is not configured", storage_id))
     }
 
-    pub fn default_storage(&self) -> Result<Arc<dyn CacheStorage>> {
+    pub fn default_storage(&self) -> Result<Arc<dyn DepotStorage>> {
         self.storage(&self.default_storage_id)
     }
 

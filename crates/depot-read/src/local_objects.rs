@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use tracing::warn;
 
 use depot_core::storage::StorageId;
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_db::SqliteDatabase;
 use depot_store::blob::{BlobBytes, BlobMetadata};
 use depot_store::{ObjectStore, StorageCatalog};
@@ -19,10 +19,10 @@ impl DbBackedObjectStore {
         Self { db, catalog }
     }
 
-    async fn preferred_storage_id(&self, view: &CacheView) -> Result<StorageId> {
+    async fn preferred_storage_id(&self, view: &DepotView) -> Result<StorageId> {
         match view {
-            CacheView::Aggregate => Ok(self.catalog.default_storage_id().clone()),
-            CacheView::Project(project) => self.db.get_project_storage_id(project).await,
+            DepotView::Aggregate => Ok(self.catalog.default_storage_id().clone()),
+            DepotView::Project(project) => self.db.get_project_storage_id(project).await,
         }
     }
 
@@ -117,7 +117,7 @@ impl DbBackedObjectStore {
 
     pub async fn get_visible(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
         if !self
@@ -158,13 +158,13 @@ mod tests {
 
     use depot_core::storage::StorageId;
     use depot_store::blob::BlobMetadata;
-    use depot_store::{CacheStorage, FilesystemStorage, StorageCatalog};
+    use depot_store::{DepotStorage, FilesystemStorage, StorageCatalog};
 
     use super::*;
 
     fn catalog_for(root: &Path) -> StorageCatalog {
         let storage_id = StorageId::main();
-        let storage: Arc<dyn CacheStorage> = Arc::new(FilesystemStorage::new(root));
+        let storage: Arc<dyn DepotStorage> = Arc::new(FilesystemStorage::new(root));
         StorageCatalog::new(storage_id.clone(), BTreeMap::from([(storage_id, storage)])).unwrap()
     }
 

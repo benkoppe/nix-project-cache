@@ -10,7 +10,7 @@ pub mod upstreams;
 
 pub use local_objects::DbBackedObjectStore;
 pub use object_provider::{
-    CacheObjectProvider, DbBlobCacheObjectProvider, InMemoryCacheObjectProvider,
+    DbBlobDepotObjectProvider, DepotObjectProvider, InMemoryDepotObjectProvider,
 };
 pub use resolver::{DbNarInfoResolver, InMemoryNarInfoResolver, NarInfoResolver};
 pub use router::read_router;
@@ -39,14 +39,14 @@ mod tests {
     };
 
     use crate::{
-        InMemoryCacheObjectProvider, InMemoryNarInfoResolver, ReadAppState, ReadService,
+        InMemoryDepotObjectProvider, InMemoryNarInfoResolver, ReadAppState, ReadService,
         StaticUpstreamSelector, read_router,
     };
 
-    fn sample_object_provider() -> InMemoryCacheObjectProvider {
+    fn sample_object_provider() -> InMemoryDepotObjectProvider {
         let path = hello_path();
 
-        let mut provider = InMemoryCacheObjectProvider::new();
+        let mut provider = InMemoryDepotObjectProvider::new();
         provider.insert(
             path.url(),
             BlobMetadata::new("application/octet-stream", Some(9), None, None),
@@ -100,7 +100,7 @@ mod tests {
 
         let read_service = ReadService::new(
             Arc::new(InMemoryNarInfoResolver::new()),
-            Arc::new(InMemoryCacheObjectProvider::new()),
+            Arc::new(InMemoryDepotObjectProvider::new()),
             Arc::new(upstream_client),
             Arc::new(upstream_selector),
             NarInfoRenderer::new(StoreDir::default()),

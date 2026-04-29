@@ -3,14 +3,14 @@ use std::io::Write;
 use anyhow::{Context as _, Result};
 
 use depot_api::PinInfo;
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 
 use crate::cli::{CreatePinCommand, DeletePinCommand, ListPinsCommand, PinsCommand};
 use crate::output;
 
 pub async fn handle(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: PinsCommand,
@@ -23,7 +23,7 @@ pub async fn handle(
 }
 
 async fn list_pins(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ListPinsCommand,
@@ -43,7 +43,7 @@ async fn list_pins(
 }
 
 async fn create_pin(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: CreatePinCommand,
@@ -83,7 +83,7 @@ async fn create_pin(
 }
 
 async fn delete_pin(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: DeletePinCommand,
@@ -232,8 +232,8 @@ mod tests {
         );
     }
 
-    fn client_for(server: &TestServer) -> CacheClient {
-        CacheClient::new(&server.base_url, "secret-token").unwrap()
+    fn client_for(server: &TestServer) -> DepotClient {
+        DepotClient::new(&server.base_url, "secret-token").unwrap()
     }
 
     #[tokio::test]

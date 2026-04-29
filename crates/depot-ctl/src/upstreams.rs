@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::{Context as _, Result, bail};
 
 use depot_api::{UpsertUpstreamRequest, UpstreamInfo};
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 
 use crate::cli::{
@@ -12,7 +12,7 @@ use crate::cli::{
 use crate::output;
 
 pub async fn handle(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: UpstreamsCommand,
@@ -38,7 +38,7 @@ pub async fn handle(
 }
 
 async fn list_upstreams(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
 ) -> Result<()> {
@@ -47,7 +47,7 @@ async fn list_upstreams(
 }
 
 async fn upsert_upstream(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: UpsertUpstreamCommand,
@@ -88,7 +88,7 @@ async fn upsert_upstream(
 }
 
 async fn set_upstream_enabled(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: UpstreamNameCommand,
@@ -123,7 +123,7 @@ async fn set_upstream_enabled(
 }
 
 async fn link_project_upstream(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: LinkProjectUpstreamCommand,
@@ -169,7 +169,7 @@ async fn link_project_upstream(
 }
 
 async fn unlink_project_upstream(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: LinkProjectUpstreamCommand,

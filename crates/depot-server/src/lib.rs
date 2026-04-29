@@ -15,7 +15,7 @@ use depot_core::signing::NamedSigningKey;
 use depot_db::SqliteDatabase;
 use depot_ingest::{GcService, IngestService};
 use depot_read::{
-    DbBackedObjectStore, DbBlobCacheObjectProvider, DbNarInfoResolver, DbProjectSigningKeys,
+    DbBackedObjectStore, DbBlobDepotObjectProvider, DbNarInfoResolver, DbProjectSigningKeys,
     DbUpstreamSelector, ReadAppState, ReadService, read_router,
 };
 use depot_store::StorageCatalog;
@@ -33,7 +33,7 @@ pub struct AppParts {
     pub key_encryption_key: Option<KeyEncryptionKey>,
     pub storage_catalog: StorageCatalog,
     pub upstream_client: Arc<dyn UpstreamCacheClient>,
-    pub cache_priority: u32,
+    pub depot_priority: u32,
 }
 
 pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
@@ -63,7 +63,7 @@ pub async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
             key_encryption_key: config.signing.project_key_encryption_key.clone(),
             storage_catalog,
             upstream_client: Arc::new(ReqwestUpstreamCacheClient::default()),
-            cache_priority: config.server.priority,
+            depot_priority: config.server.priority,
         },
         authorizer,
     ))
@@ -82,13 +82,13 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
         key_encryption_key,
         storage_catalog,
         upstream_client,
-        cache_priority,
+        depot_priority,
     } = parts;
 
     let renderer = depot_core::narinfo::NarInfoRenderer::new(store_dir.clone());
 
     let object_store = DbBackedObjectStore::new(db.clone(), storage_catalog.clone());
-    let object_provider = DbBlobCacheObjectProvider::new(object_store.clone());
+    let object_provider = DbBlobDepotObjectProvider::new(object_store.clone());
     let upstream_selector = DbUpstreamSelector::new(db.clone());
 
     let project_signing_keys = key_encryption_key
@@ -105,7 +105,7 @@ pub fn build_app_with_authorizer(parts: AppParts, authorizer: Arc<dyn Authorizer
         project_signing_keys,
     );
 
-    let read_state = ReadAppState::new(Arc::new(read_service), cache_priority);
+    let read_state = ReadAppState::new(Arc::new(read_service), depot_priority);
     let read_routes = read_router(read_state);
 
     if mode == AppMode::ReadOnly {

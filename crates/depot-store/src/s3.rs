@@ -17,7 +17,7 @@ use tokio::io::AsyncReadExt as _;
 
 use crate::blob::{BlobBytes, BlobMetadata};
 use crate::local::{
-    CacheStorage, CompletedMultipartUpload, CompletedMultipartUploadPart, MultipartUpload,
+    CompletedMultipartUpload, CompletedMultipartUploadPart, DepotStorage, MultipartUpload,
     PresignedUploadPartUrl, UploadReader,
 };
 
@@ -384,7 +384,7 @@ async fn read_next_part(reader: &mut UploadReader, part_size: usize) -> Result<O
 }
 
 #[async_trait]
-impl CacheStorage for S3Storage {
+impl DepotStorage for S3Storage {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
         let key = self.object_key(object_path)?;
 
@@ -890,7 +890,7 @@ mod tests {
     #[tokio::test]
     async fn presigned_multipart_part_uploads_to_prefixed_key() {
         let server = FakeS3Server::start().await;
-        let storage = server.storage_with_prefix("/cache-objects/");
+        let storage = server.storage_with_prefix("/depot-objects/");
 
         let upload = storage
             .create_multipart_upload("nar/test.nar.zst")
@@ -945,7 +945,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            server.stored("test-bucket/cache-objects/nar/test.nar.zst"),
+            server.stored("test-bucket/depot-objects/nar/test.nar.zst"),
             Some(body)
         );
     }
@@ -1045,7 +1045,7 @@ mod tests {
     #[tokio::test]
     async fn prefix_is_applied_to_object_keys() {
         let server = FakeS3Server::start().await;
-        let storage = server.storage_with_prefix("/cache-objects/");
+        let storage = server.storage_with_prefix("/depot-objects/");
 
         storage
             .put_bytes("nar/object.nar", BlobBytes::from_static(b"hello"))
@@ -1053,7 +1053,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            server.stored("test-bucket/cache-objects/nar/object.nar"),
+            server.stored("test-bucket/depot-objects/nar/object.nar"),
             Some(Bytes::from_static(b"hello"))
         );
     }
@@ -1074,10 +1074,10 @@ mod tests {
     #[test]
     fn invalid_prefixes_are_rejected() {
         assert!(normalize_prefix(Some("../escape".to_owned())).is_err());
-        assert!(normalize_prefix(Some("cache/../escape".to_owned())).is_err());
+        assert!(normalize_prefix(Some("depot/../escape".to_owned())).is_err());
         assert_eq!(
-            normalize_prefix(Some("/cache/objects/".to_owned())).unwrap(),
-            Some("cache/objects".to_owned())
+            normalize_prefix(Some("/depot/objects/".to_owned())).unwrap(),
+            Some("depot/objects".to_owned())
         );
         assert_eq!(normalize_prefix(Some("/".to_owned())).unwrap(), None);
     }

@@ -86,8 +86,8 @@ mod tests {
     #[tokio::test]
     async fn generated_key_files_are_parseable_and_match_public_key() {
         let temp_dir = tempdir().unwrap();
-        let secret_file = temp_dir.path().join("cache.sec");
-        let public_file = temp_dir.path().join("cache.pub");
+        let secret_file = temp_dir.path().join("depot.sec");
+        let public_file = temp_dir.path().join("depot.pub");
 
         let mut output = Vec::new();
 

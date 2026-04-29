@@ -1,10 +1,10 @@
 use anyhow::{Context as _, Result};
 
 use depot_api::{RequiredUpload, UploadMethod};
-use depot_core::cache_path::{CacheObjectPath, parse_cache_object_path};
+use depot_core::depot_path::{DepotObjectPath, parse_depot_object_path};
 use depot_core::narinfo::NarInfo;
 use depot_core::nix::StorePathHash;
-use depot_store::CacheStorage;
+use depot_store::DepotStorage;
 use depot_store::upstream::{UpstreamCache, UpstreamCacheClient};
 
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ impl PlannedUpload {
 }
 
 pub async fn plan_required_uploads(
-    storage: &dyn CacheStorage,
+    storage: &dyn DepotStorage,
     upstream_client: &dyn UpstreamCacheClient,
     upstreams: &[UpstreamCache],
     narinfos: &[NarInfo],
@@ -39,8 +39,8 @@ pub async fn plan_required_uploads(
 
         let object_path = narinfo.url.clone();
 
-        match parse_cache_object_path(&object_path) {
-            Some(CacheObjectPath::Nar { .. }) => {}
+        match parse_depot_object_path(&object_path) {
+            Some(DepotObjectPath::Nar { .. }) => {}
             _ => continue,
         }
 

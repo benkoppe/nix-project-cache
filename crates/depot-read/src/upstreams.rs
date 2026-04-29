@@ -4,13 +4,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use depot_core::project::ProjectSlug;
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_db::SqliteDatabase;
 use depot_store::upstream::UpstreamCache;
 
 #[async_trait]
 pub trait UpstreamSelector: Send + Sync + 'static {
-    async fn upstreams_for_view(&self, view: &CacheView) -> Result<Vec<UpstreamCache>>;
+    async fn upstreams_for_view(&self, view: &DepotView) -> Result<Vec<UpstreamCache>>;
 }
 
 #[derive(Default, Clone)]
@@ -35,10 +35,10 @@ impl StaticUpstreamSelector {
 
 #[async_trait]
 impl UpstreamSelector for StaticUpstreamSelector {
-    async fn upstreams_for_view(&self, view: &CacheView) -> Result<Vec<UpstreamCache>> {
+    async fn upstreams_for_view(&self, view: &DepotView) -> Result<Vec<UpstreamCache>> {
         let upstreams = match view {
-            CacheView::Aggregate => self.aggregate.clone(),
-            CacheView::Project(project) => self.projects.get(project).cloned().unwrap_or_default(),
+            DepotView::Aggregate => self.aggregate.clone(),
+            DepotView::Project(project) => self.projects.get(project).cloned().unwrap_or_default(),
         };
 
         Ok(upstreams)
@@ -58,16 +58,16 @@ impl DbUpstreamSelector {
 
 #[async_trait]
 impl UpstreamSelector for DbUpstreamSelector {
-    async fn upstreams_for_view(&self, view: &CacheView) -> Result<Vec<UpstreamCache>> {
+    async fn upstreams_for_view(&self, view: &DepotView) -> Result<Vec<UpstreamCache>> {
         match view {
-            CacheView::Aggregate => Ok(self
+            DepotView::Aggregate => Ok(self
                 .db
                 .list_enabled_upstreams()
                 .await?
                 .into_iter()
                 .map(|record| record.into_runtime_config())
                 .collect()),
-            CacheView::Project(project) => Ok(self
+            DepotView::Project(project) => Ok(self
                 .db
                 .list_enabled_upstreams_for_project(project)
                 .await?
@@ -103,7 +103,7 @@ mod tests {
         selector.set_project_upstreams(project.clone(), vec![upstream.clone()]);
 
         let loaded = selector
-            .upstreams_for_view(&CacheView::Project(project))
+            .upstreams_for_view(&DepotView::Project(project))
             .await
             .unwrap();
 
@@ -135,11 +135,11 @@ mod tests {
         let selector = DbUpstreamSelector::new(db);
 
         let aggregate = selector
-            .upstreams_for_view(&CacheView::Aggregate)
+            .upstreams_for_view(&DepotView::Aggregate)
             .await
             .unwrap();
         let project_upstreams = selector
-            .upstreams_for_view(&CacheView::Project(project))
+            .upstreams_for_view(&DepotView::Project(project))
             .await
             .unwrap();
 

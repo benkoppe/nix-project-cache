@@ -7,7 +7,7 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 use depot_api::{BeginBuildRequest, UploadMethod};
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::nix::StorePathHash;
 use depot_core::project::ProjectSlug;
 
@@ -23,7 +23,7 @@ pub struct PushOptions {
     pub paths: Vec<String>,
 }
 
-pub async fn push_paths(client: &CacheClient, options: PushOptions) -> Result<()> {
+pub async fn push_paths(client: &DepotClient, options: PushOptions) -> Result<()> {
     let store_dir = nix::get_store_dir().await?;
     let resolved_paths = nix::resolve_symlinks(&options.paths, &store_dir).await?;
     let path_infos = nix::get_path_infos_recursive(&resolved_paths).await?;

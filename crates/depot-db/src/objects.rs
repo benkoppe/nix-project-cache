@@ -4,7 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use depot_core::nix::StorePathHash;
 use depot_core::storage::{PathObjectKind, StorageId};
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_store::blob::BlobMetadata;
 
 use crate::models::StorageObjectLookupRow;
@@ -127,11 +127,11 @@ impl SqliteDatabase {
 
     pub async fn storage_object_visible_in_view(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         object_path: &str,
     ) -> Result<bool> {
         let value = match view {
-            CacheView::Aggregate => sqlx::query!(
+            DepotView::Aggregate => sqlx::query!(
                 r#"
                 SELECT 1 AS "present!: i64"
                 FROM path_objects po
@@ -146,7 +146,7 @@ impl SqliteDatabase {
             .await
             .context("checking aggregate object visibility")?
             .is_some(),
-            CacheView::Project(project) => {
+            DepotView::Project(project) => {
                 let project_slug = project.as_str();
                 sqlx::query!(
                     r#"

@@ -5,7 +5,7 @@ use bytes::Bytes;
 use reqwest::StatusCode;
 
 use depot_api::BeginBuildRequest;
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 use depot_store::blob::BlobMetadata;
 use depot_store::upstream::InMemoryUpstreamCacheClient;
@@ -17,7 +17,7 @@ use depot_test_utils::{
 use utils::TestApp;
 
 async fn publish_single_path(
-    client: &CacheClient,
+    client: &DepotClient,
     project: &ProjectSlug,
     ref_name: &str,
     revision: &str,

@@ -6,14 +6,14 @@ use async_trait::async_trait;
 use depot_core::narinfo::NarInfo;
 use depot_core::nix::StorePathHash;
 use depot_core::project::ProjectSlug;
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_db::SqliteDatabase;
 
 #[async_trait]
 pub trait NarInfoResolver: Send + Sync + 'static {
     async fn resolve_narinfo(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         store_path_hash: &StorePathHash,
     ) -> Result<Option<NarInfo>>;
 }
@@ -50,12 +50,12 @@ impl InMemoryNarInfoResolver {
 impl NarInfoResolver for InMemoryNarInfoResolver {
     async fn resolve_narinfo(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         store_path_hash: &StorePathHash,
     ) -> Result<Option<NarInfo>> {
         let result = match view {
-            CacheView::Aggregate => self.aggregate.get(store_path_hash).cloned(),
-            CacheView::Project(project) => self
+            DepotView::Aggregate => self.aggregate.get(store_path_hash).cloned(),
+            DepotView::Project(project) => self
                 .projects
                 .get(project)
                 .and_then(|entries| entries.get(store_path_hash))
@@ -81,12 +81,12 @@ impl DbNarInfoResolver {
 impl NarInfoResolver for DbNarInfoResolver {
     async fn resolve_narinfo(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         store_path_hash: &StorePathHash,
     ) -> Result<Option<NarInfo>> {
         match view {
-            CacheView::Aggregate => self.db.get_aggregate_narinfo(store_path_hash).await,
-            CacheView::Project(project) => {
+            DepotView::Aggregate => self.db.get_aggregate_narinfo(store_path_hash).await,
+            DepotView::Project(project) => {
                 self.db.get_project_narinfo(project, store_path_hash).await
             }
         }

@@ -3,14 +3,14 @@ use std::io::Write;
 use anyhow::{Context as _, Result, bail};
 
 use depot_api::{AccessTokenInfo, CreateAccessTokenRequest};
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 
 use crate::cli::{CreateTokenCommand, ListTokensCommand, RevokeTokenCommand, TokensCommand};
 use crate::output;
 
 pub async fn handle(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: TokensCommand,
@@ -23,7 +23,7 @@ pub async fn handle(
 }
 
 async fn list_tokens(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ListTokensCommand,
@@ -43,7 +43,7 @@ async fn list_tokens(
 }
 
 async fn create_token(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: CreateTokenCommand,
@@ -75,7 +75,7 @@ async fn create_token(
 }
 
 async fn revoke_token(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: RevokeTokenCommand,
@@ -238,8 +238,8 @@ mod tests {
         );
     }
 
-    fn client_for(server: &TestServer) -> CacheClient {
-        CacheClient::new(&server.base_url, "secret-token").unwrap()
+    fn client_for(server: &TestServer) -> DepotClient {
+        DepotClient::new(&server.base_url, "secret-token").unwrap()
     }
 
     #[tokio::test]

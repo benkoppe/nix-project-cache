@@ -354,12 +354,12 @@ mod tests {
     #[test]
     fn render_sorts_embedded_signatures() {
         let mut narinfo = sample_narinfo();
-        narinfo.signatures = vec!["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()];
+        narinfo.signatures = vec!["depot-b:bbbb".to_owned(), "depot-a:aaaa".to_owned()];
 
         let rendered = sample_renderer().render(&narinfo).unwrap();
 
-        let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
-        let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
+        let a_pos = rendered.find("Sig: depot-a:aaaa\n").unwrap();
+        let b_pos = rendered.find("Sig: depot-b:bbbb\n").unwrap();
         assert!(a_pos < b_pos);
     }
 
@@ -369,12 +369,12 @@ mod tests {
         let rendered = sample_renderer()
             .render_with_signatures(
                 &narinfo,
-                &["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()],
+                &["depot-b:bbbb".to_owned(), "depot-a:aaaa".to_owned()],
             )
             .unwrap();
 
-        let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
-        let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
+        let a_pos = rendered.find("Sig: depot-a:aaaa\n").unwrap();
+        let b_pos = rendered.find("Sig: depot-b:bbbb\n").unwrap();
         assert!(a_pos < b_pos);
     }
 
@@ -426,12 +426,12 @@ mod tests {
         let rendered = sample_renderer()
             .render_with_signatures(
                 &narinfo,
-                &["cache-b:bbbb".to_owned(), "cache-a:aaaa".to_owned()],
+                &["depot-b:bbbb".to_owned(), "depot-a:aaaa".to_owned()],
             )
             .unwrap();
 
-        let a_pos = rendered.find("Sig: cache-a:aaaa\n").unwrap();
-        let b_pos = rendered.find("Sig: cache-b:bbbb\n").unwrap();
+        let a_pos = rendered.find("Sig: depot-a:aaaa\n").unwrap();
+        let b_pos = rendered.find("Sig: depot-b:bbbb\n").unwrap();
         assert!(a_pos < b_pos);
     }
 
@@ -527,8 +527,8 @@ Compression: zstd
 NarHash: sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
 NarSize: 226560
 References: 
-Sig: cache-a:aaaa
-Sig: cache-b:bbbb
+Sig: depot-a:aaaa
+Sig: depot-b:bbbb
 CA: fixed:r:sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
 ";
 
@@ -536,7 +536,7 @@ CA: fixed:r:sha256:020ay2q1av2xs4n842rb3d7vz8qms1dcb87a5yd6azaci20x11lz
 
         assert_eq!(
             parsed.signatures,
-            vec!["cache-a:aaaa".to_owned(), "cache-b:bbbb".to_owned()]
+            vec!["depot-a:aaaa".to_owned(), "depot-b:bbbb".to_owned()]
         );
         assert!(matches!(parsed.ca, Some(NixContentAddress::Raw(_))));
     }

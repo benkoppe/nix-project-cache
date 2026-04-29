@@ -21,22 +21,22 @@ use depot_core::nix::StorePathHash;
 use depot_core::project::ProjectSlug;
 use depot_core::storage::StorageId;
 
-use crate::error::CacheClientError;
+use crate::error::DepotClientError;
 use crate::routes;
 
 const MAX_MULTIPART_PARTS: i32 = 10_000;
 
 #[derive(Clone)]
-pub struct CacheClient {
+pub struct DepotClient {
     base_url: Url,
     auth_token: String,
     http_client: reqwest::Client,
 }
 
-impl CacheClient {
-    pub fn new(server_url: &str, auth_token: impl Into<String>) -> Result<Self, CacheClientError> {
+impl DepotClient {
+    pub fn new(server_url: &str, auth_token: impl Into<String>) -> Result<Self, DepotClientError> {
         let mut base_url =
-            Url::parse(server_url).map_err(|error| CacheClientError::InvalidServerUrl {
+            Url::parse(server_url).map_err(|error| DepotClientError::InvalidServerUrl {
                 url: server_url.to_owned(),
                 message: error.to_string(),
             })?;
@@ -66,7 +66,7 @@ impl CacheClient {
     pub async fn begin_build(
         &self,
         request: BeginBuildRequest,
-    ) -> Result<BeginBuildResponse, CacheClientError> {
+    ) -> Result<BeginBuildResponse, DepotClientError> {
         let url = routes::begin_build(&self.base_url)?;
         let response = self
             .request(Method::POST, url)
@@ -81,7 +81,7 @@ impl CacheClient {
         &self,
         build_id: &str,
         paths: Vec<NarInfo>,
-    ) -> Result<RegisterPathsResponse, CacheClientError> {
+    ) -> Result<RegisterPathsResponse, DepotClientError> {
         let url = routes::register_paths(&self.base_url, build_id)?;
         let payloads = paths.iter().map(depot_api::NarInfoPayload::from).collect();
 
@@ -103,7 +103,7 @@ impl CacheClient {
         store_path_hash: &StorePathHash,
         object_path: &str,
         reader: R,
-    ) -> Result<(), CacheClientError>
+    ) -> Result<(), DepotClientError>
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
@@ -126,7 +126,7 @@ impl CacheClient {
         store_path_hash: &StorePathHash,
         object_path: &str,
         bytes: bytes::Bytes,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::upload_object(&self.base_url, build_id, store_path_hash, object_path)?;
 
         let response = self
@@ -147,7 +147,7 @@ impl CacheClient {
         upload_id: &str,
         part_number: i32,
         content_length: u64,
-    ) -> Result<PresignMultipartUploadPartResponse, CacheClientError> {
+    ) -> Result<PresignMultipartUploadPartResponse, DepotClientError> {
         let url = routes::presign_multipart_upload_part(
             &self.base_url,
             build_id,
@@ -176,7 +176,7 @@ impl CacheClient {
         upload_id: &str,
         parts: Vec<CompletedUploadPart>,
         content_length: u64,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::complete_multipart_upload(&self.base_url, build_id, store_path_hash)?;
 
         let response = self
@@ -199,7 +199,7 @@ impl CacheClient {
         store_path_hash: &StorePathHash,
         object_path: &str,
         upload_id: &str,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::abort_multipart_upload(&self.base_url, build_id, store_path_hash)?;
 
         let response = self
@@ -221,7 +221,7 @@ impl CacheClient {
         object_path: &str,
         upload: &S3MultipartUpload,
         reader: R,
-    ) -> Result<(), CacheClientError>
+    ) -> Result<(), DepotClientError>
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
@@ -258,12 +258,12 @@ impl CacheClient {
         object_path: &str,
         upload: &S3MultipartUpload,
         mut reader: R,
-    ) -> Result<(), CacheClientError>
+    ) -> Result<(), DepotClientError>
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
         let part_size =
-            usize::try_from(upload.part_size).map_err(|error| CacheClientError::ClientUpload {
+            usize::try_from(upload.part_size).map_err(|error| DepotClientError::ClientUpload {
                 message: format!("invalid multipart part size: {error}"),
             })?;
 
@@ -273,7 +273,7 @@ impl CacheClient {
 
         loop {
             if part_number > MAX_MULTIPART_PARTS {
-                return Err(CacheClientError::ClientUpload {
+                return Err(DepotClientError::ClientUpload {
                     message: format!("multipart upload exceeded {MAX_MULTIPART_PARTS} parts"),
                 });
             }
@@ -283,7 +283,7 @@ impl CacheClient {
             };
 
             let content_length = u64::try_from(part_bytes.len()).map_err(|error| {
-                CacheClientError::ClientUpload {
+                DepotClientError::ClientUpload {
                     message: format!("invalid multipart part length: {error}"),
                 }
             })?;
@@ -309,7 +309,7 @@ impl CacheClient {
         }
 
         if completed_parts.is_empty() {
-            return Err(CacheClientError::ClientUpload {
+            return Err(DepotClientError::ClientUpload {
                 message: "multipart upload produced no parts".to_owned(),
             });
         }
@@ -330,7 +330,7 @@ impl CacheClient {
         url: &str,
         bytes: bytes::Bytes,
         content_length: u64,
-    ) -> Result<String, CacheClientError> {
+    ) -> Result<String, DepotClientError> {
         let response = self
             .http_client
             .put(url)
@@ -348,7 +348,7 @@ impl CacheClient {
             .headers()
             .get(reqwest::header::ETAG)
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| CacheClientError::ClientUpload {
+            .ok_or_else(|| DepotClientError::ClientUpload {
                 message: "presigned multipart part response missing ETag".to_owned(),
             })?
             .to_owned();
@@ -362,7 +362,7 @@ impl CacheClient {
         file: tokio::fs::File,
         content_length: u64,
         content_type: &str,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
 
         let response = self
@@ -384,7 +384,7 @@ impl CacheClient {
     pub async fn finalize_build(
         &self,
         build_id: &str,
-    ) -> Result<FinalizeBuildResponse, CacheClientError> {
+    ) -> Result<FinalizeBuildResponse, DepotClientError> {
         let url = routes::finalize_build(&self.base_url, build_id)?;
         let response = self.request(Method::POST, url).send().await?;
 
@@ -394,7 +394,7 @@ impl CacheClient {
     pub async fn list_pins(
         &self,
         project: Option<&ProjectSlug>,
-    ) -> Result<Vec<PinInfo>, CacheClientError> {
+    ) -> Result<Vec<PinInfo>, DepotClientError> {
         let url = routes::list_pins(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -406,7 +406,7 @@ impl CacheClient {
         name: &str,
         project: Option<&ProjectSlug>,
         store_path: &str,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::create_pin(&self.base_url, name)?;
         let response = self
             .request(Method::POST, url)
@@ -424,7 +424,7 @@ impl CacheClient {
         &self,
         name: &str,
         project: Option<&ProjectSlug>,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::delete_pin(&self.base_url, name, project)?;
         let response = self.request(Method::DELETE, url).send().await?;
 
@@ -435,7 +435,7 @@ impl CacheClient {
         }
     }
 
-    pub async fn run_gc(&self, request: RunGcRequest) -> Result<RunGcResponse, CacheClientError> {
+    pub async fn run_gc(&self, request: RunGcRequest) -> Result<RunGcResponse, DepotClientError> {
         let url = routes::run_gc(&self.base_url)?;
         let response = self
             .request(Method::POST, url)
@@ -446,7 +446,7 @@ impl CacheClient {
         self.expect_json(response, &[StatusCode::OK]).await
     }
 
-    pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>, CacheClientError> {
+    pub async fn list_projects(&self) -> Result<Vec<ProjectInfo>, DepotClientError> {
         let url = routes::list_projects(&self.base_url)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -458,7 +458,7 @@ impl CacheClient {
         project: &ProjectSlug,
         display_name: &str,
         public: bool,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         self.upsert_project_with_storage(project, display_name, public, None)
             .await
     }
@@ -469,7 +469,7 @@ impl CacheClient {
         display_name: &str,
         public: bool,
         storage_id: Option<&StorageId>,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::upsert_project(&self.base_url)?;
         let response = self
             .request(Method::POST, url)
@@ -488,7 +488,7 @@ impl CacheClient {
     pub async fn list_project_oidc_identities(
         &self,
         project: &ProjectSlug,
-    ) -> Result<Vec<ProjectOidcIdentityInfo>, CacheClientError> {
+    ) -> Result<Vec<ProjectOidcIdentityInfo>, DepotClientError> {
         let url = routes::project_oidc_identities(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -499,7 +499,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         request: UpsertProjectOidcIdentityRequest,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::project_oidc_identities(&self.base_url, project)?;
         let response = self
             .request(Method::POST, url)
@@ -514,7 +514,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         request: DeleteProjectOidcIdentityRequest,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::project_oidc_identities(&self.base_url, project)?;
         let response = self
             .request(Method::DELETE, url)
@@ -532,7 +532,7 @@ impl CacheClient {
     pub async fn get_project_retention_policy(
         &self,
         project: &ProjectSlug,
-    ) -> Result<ProjectRetentionPolicyInfo, CacheClientError> {
+    ) -> Result<ProjectRetentionPolicyInfo, DepotClientError> {
         let url = routes::project_retention(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -543,7 +543,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         request: UpsertProjectRetentionPolicyRequest,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::project_retention(&self.base_url, project)?;
         let response = self.request(Method::PUT, url).json(&request).send().await?;
 
@@ -553,7 +553,7 @@ impl CacheClient {
     pub async fn delete_project_retention_policy(
         &self,
         project: &ProjectSlug,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::project_retention(&self.base_url, project)?;
         let response = self.request(Method::DELETE, url).send().await?;
 
@@ -567,7 +567,7 @@ impl CacheClient {
     pub async fn get_project_signing_key(
         &self,
         project: &ProjectSlug,
-    ) -> Result<ProjectSigningKeyInfo, CacheClientError> {
+    ) -> Result<ProjectSigningKeyInfo, DepotClientError> {
         let url = routes::project_signing_key(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -578,7 +578,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         name: Option<String>,
-    ) -> Result<ProjectSigningKeyResponse, CacheClientError> {
+    ) -> Result<ProjectSigningKeyResponse, DepotClientError> {
         let url = routes::generate_project_signing_key(&self.base_url, project)?;
         let response = self
             .request(Method::POST, url)
@@ -594,7 +594,7 @@ impl CacheClient {
         project: &ProjectSlug,
         name: Option<String>,
         signing_key: String,
-    ) -> Result<ProjectSigningKeyResponse, CacheClientError> {
+    ) -> Result<ProjectSigningKeyResponse, DepotClientError> {
         let url = routes::import_project_signing_key(&self.base_url, project)?;
         let response = self
             .request(Method::POST, url)
@@ -605,7 +605,7 @@ impl CacheClient {
         self.expect_json(response, &[StatusCode::OK]).await
     }
 
-    pub async fn list_upstreams(&self) -> Result<Vec<UpstreamInfo>, CacheClientError> {
+    pub async fn list_upstreams(&self) -> Result<Vec<UpstreamInfo>, DepotClientError> {
         let url = routes::upstreams(&self.base_url)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -615,7 +615,7 @@ impl CacheClient {
     pub async fn upsert_upstream(
         &self,
         request: UpsertUpstreamRequest,
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let url = routes::upstreams(&self.base_url)?;
         let response = self
             .request(Method::POST, url)
@@ -630,7 +630,7 @@ impl CacheClient {
         &self,
         upstream: &str,
         enabled: bool,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::upstream_enabled(&self.base_url, upstream, enabled)?;
         let response = self.request(Method::POST, url).send().await?;
 
@@ -644,7 +644,7 @@ impl CacheClient {
     pub async fn list_project_upstreams(
         &self,
         project: &ProjectSlug,
-    ) -> Result<Vec<UpstreamInfo>, CacheClientError> {
+    ) -> Result<Vec<UpstreamInfo>, DepotClientError> {
         let url = routes::project_upstreams(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
@@ -655,7 +655,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         upstream: &str,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::project_upstream(&self.base_url, project, upstream)?;
         let response = self.request(Method::POST, url).send().await?;
 
@@ -670,7 +670,7 @@ impl CacheClient {
         &self,
         project: &ProjectSlug,
         upstream: &str,
-    ) -> Result<bool, CacheClientError> {
+    ) -> Result<bool, DepotClientError> {
         let url = routes::project_upstream(&self.base_url, project, upstream)?;
         let response = self.request(Method::DELETE, url).send().await?;
 
@@ -684,7 +684,7 @@ impl CacheClient {
     pub async fn create_access_token(
         &self,
         request: CreateAccessTokenRequest,
-    ) -> Result<CreateAccessTokenResponse, CacheClientError> {
+    ) -> Result<CreateAccessTokenResponse, DepotClientError> {
         let url = routes::access_tokens(&self.base_url, None)?;
         let response = self
             .request(Method::POST, url)
@@ -698,14 +698,14 @@ impl CacheClient {
     pub async fn list_access_tokens(
         &self,
         project: Option<&ProjectSlug>,
-    ) -> Result<Vec<AccessTokenInfo>, CacheClientError> {
+    ) -> Result<Vec<AccessTokenInfo>, DepotClientError> {
         let url = routes::access_tokens(&self.base_url, project)?;
         let response = self.request(Method::GET, url).send().await?;
 
         self.expect_json(response, &[StatusCode::OK]).await
     }
 
-    pub async fn revoke_access_token(&self, token_id: &str) -> Result<bool, CacheClientError> {
+    pub async fn revoke_access_token(&self, token_id: &str) -> Result<bool, DepotClientError> {
         let url = routes::revoke_access_token(&self.base_url, token_id)?;
         let response = self.request(Method::DELETE, url).send().await?;
 
@@ -726,7 +726,7 @@ impl CacheClient {
         &self,
         response: reqwest::Response,
         ok_statuses: &[StatusCode],
-    ) -> Result<(), CacheClientError> {
+    ) -> Result<(), DepotClientError> {
         let status = response.status();
         if ok_statuses.contains(&status) {
             Ok(())
@@ -739,7 +739,7 @@ impl CacheClient {
         &self,
         response: reqwest::Response,
         ok_statuses: &[StatusCode],
-    ) -> Result<T, CacheClientError> {
+    ) -> Result<T, DepotClientError> {
         let status = response.status();
         if ok_statuses.contains(&status) {
             Ok(response.json().await?)
@@ -752,21 +752,21 @@ impl CacheClient {
         &self,
         response: reqwest::Response,
         status: StatusCode,
-    ) -> CacheClientError {
+    ) -> DepotClientError {
         let body = response.text().await.unwrap_or_else(|error| {
             let mut message = String::from("<failed to read error body: ");
             let _ = write!(&mut message, "{error}>");
             message
         });
 
-        CacheClientError::UnexpectedStatus { status, body }
+        DepotClientError::UnexpectedStatus { status, body }
     }
 }
 
 async fn read_next_upload_part<R>(
     reader: &mut R,
     part_size: usize,
-) -> Result<Option<bytes::Bytes>, CacheClientError>
+) -> Result<Option<bytes::Bytes>, DepotClientError>
 where
     R: AsyncRead + Unpin,
 {
@@ -780,7 +780,7 @@ where
         let bytes_read = reader
             .read(&mut chunk[..read_size])
             .await
-            .map_err(|error| CacheClientError::ClientUpload {
+            .map_err(|error| DepotClientError::ClientUpload {
                 message: format!("reading multipart upload stream: {error}"),
             })?;
 
@@ -1263,7 +1263,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
 
         let response = client
             .begin_build(BeginBuildRequest {
@@ -1294,7 +1294,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let path = hello_path();
         let hash = path.hash();
 
@@ -1349,7 +1349,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let path = hello_path();
         let hash = path.hash();
 
@@ -1441,7 +1441,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse("example_repo").unwrap();
 
         let pins = client.list_pins(Some(&project)).await.unwrap();
@@ -1507,7 +1507,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
 
         let identities = client.list_project_oidc_identities(&project).await.unwrap();
@@ -1567,7 +1567,7 @@ mod tests {
         );
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
 
         let error = client
@@ -1576,7 +1576,7 @@ mod tests {
             .unwrap_err();
 
         match error {
-            CacheClientError::UnexpectedStatus { status, body } => {
+            DepotClientError::UnexpectedStatus { status, body } => {
                 assert_eq!(status, StatusCode::BAD_REQUEST);
                 assert!(body.contains("bad request"));
             }
@@ -1595,7 +1595,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let path = hello_path();
         let hash = path.hash();
 
@@ -1628,7 +1628,7 @@ mod tests {
             .with_state(state.clone());
 
         let server = TestServer::spawn(app).await.unwrap();
-        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let client = DepotClient::new(&server.base_url, "secret-token").unwrap();
         let project = ProjectSlug::parse(EXAMPLE_PROJECT_SLUG).unwrap();
 
         let created = client

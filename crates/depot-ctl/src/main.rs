@@ -10,7 +10,7 @@ mod upstreams;
 use anyhow::{Context as _, Result};
 use clap::Parser as _;
 
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 
 use crate::cli::{Cli, Command};
 
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let auth_token = auth_token
         .ok_or_else(|| anyhow::anyhow!("--auth-token or DEPOT_ADMIN_TOKEN is required"))?;
 
-    let client = CacheClient::new(&server, auth_token)
+    let client = DepotClient::new(&server, auth_token)
         .with_context(|| format!("creating client for {}", server))?;
 
     match command {

@@ -10,7 +10,7 @@ use anyhow::Context as _;
 use clap::Parser as _;
 use tracing_subscriber::EnvFilter;
 
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 
 use crate::cli::Cli;
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     let auth_token = resolve_auth_token(&cli, &http_client).await?;
 
-    let client = CacheClient::new(&cli.server, auth_token)
+    let client = DepotClient::new(&cli.server, auth_token)
         .with_context(|| format!("creating client for {}", cli.server))?;
 
     let options = PushOptions {

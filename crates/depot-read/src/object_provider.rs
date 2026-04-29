@@ -3,36 +3,36 @@ use std::collections::HashMap;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_store::blob::{BlobBytes, BlobMetadata};
 
 use crate::local_objects::DbBackedObjectStore;
 
 #[async_trait]
-pub trait CacheObjectProvider: Send + Sync + 'static {
+pub trait DepotObjectProvider: Send + Sync + 'static {
     async fn get_object(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>>;
 }
 
 #[derive(Clone)]
-pub struct DbBlobCacheObjectProvider {
+pub struct DbBlobDepotObjectProvider {
     object_store: DbBackedObjectStore,
 }
 
-impl DbBlobCacheObjectProvider {
+impl DbBlobDepotObjectProvider {
     pub fn new(object_store: DbBackedObjectStore) -> Self {
         Self { object_store }
     }
 }
 
 #[async_trait]
-impl CacheObjectProvider for DbBlobCacheObjectProvider {
+impl DepotObjectProvider for DbBlobDepotObjectProvider {
     async fn get_object(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
         self.object_store.get_visible(view, object_path).await
@@ -40,11 +40,11 @@ impl CacheObjectProvider for DbBlobCacheObjectProvider {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct InMemoryCacheObjectProvider {
+pub struct InMemoryDepotObjectProvider {
     objects: HashMap<String, (BlobMetadata, BlobBytes)>,
 }
 
-impl InMemoryCacheObjectProvider {
+impl InMemoryDepotObjectProvider {
     pub fn new() -> Self {
         Self::default()
     }
@@ -60,10 +60,10 @@ impl InMemoryCacheObjectProvider {
 }
 
 #[async_trait]
-impl CacheObjectProvider for InMemoryCacheObjectProvider {
+impl DepotObjectProvider for InMemoryDepotObjectProvider {
     async fn get_object(
         &self,
-        _view: &CacheView,
+        _view: &DepotView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
         Ok(self.objects.get(object_path).cloned())

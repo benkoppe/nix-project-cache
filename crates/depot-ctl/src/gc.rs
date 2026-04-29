@@ -3,13 +3,13 @@ use std::io::Write;
 use anyhow::{Context as _, Result};
 
 use depot_api::{RunGcRequest, RunGcResponse};
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 
 use crate::cli::{GcCommand, RunGcCommand};
 use crate::output;
 
 pub async fn handle(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: GcCommand,
@@ -20,7 +20,7 @@ pub async fn handle(
 }
 
 async fn run_gc(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: RunGcCommand,
@@ -100,8 +100,8 @@ mod tests {
         )
     }
 
-    fn client_for(server: &TestServer) -> CacheClient {
-        CacheClient::new(&server.base_url, "secret-token").unwrap()
+    fn client_for(server: &TestServer) -> DepotClient {
+        DepotClient::new(&server.base_url, "secret-token").unwrap()
     }
 
     #[tokio::test]

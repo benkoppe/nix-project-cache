@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::cache_path::{CacheObjectPath, NarCompression, parse_cache_object_path};
+use crate::depot_path::{DepotObjectPath, NarCompression, parse_depot_object_path};
 use crate::narinfo::NarInfo;
 use crate::nix::{NixHashError, StoreDir, StorePathHash, StorePathHashError};
 
@@ -15,8 +15,8 @@ pub enum PublishNarInfoValidationError {
         source: StorePathHashError,
     },
 
-    #[error("URL {url} is not a valid cache object path")]
-    InvalidCacheObjectPath { url: String },
+    #[error("URL {url} is not a valid depot object path")]
+    InvalidDepotObjectPath { url: String },
 
     #[error("URL {url} must point to a NAR object")]
     UrlIsNotNarObject { url: String },
@@ -123,15 +123,15 @@ pub fn validate_publish_narinfo(
 }
 
 fn parse_nar_url(url: &str) -> Result<(String, NarCompression), PublishNarInfoValidationError> {
-    match parse_cache_object_path(url) {
-        Some(CacheObjectPath::Nar {
+    match parse_depot_object_path(url) {
+        Some(DepotObjectPath::Nar {
             nar_hash_digest,
             compression,
         }) => Ok((nar_hash_digest, compression)),
         Some(_) => Err(PublishNarInfoValidationError::UrlIsNotNarObject {
             url: url.to_owned(),
         }),
-        None => Err(PublishNarInfoValidationError::InvalidCacheObjectPath {
+        None => Err(PublishNarInfoValidationError::InvalidDepotObjectPath {
             url: url.to_owned(),
         }),
     }

@@ -4,13 +4,13 @@
     { pkgs, self', ... }:
     let
       depotServer = self'.packages.depot-server;
-      cacheCtl = self'.packages.depot-ctl;
-      cachePush = self'.packages.depot-push;
+      depotCtl = self'.packages.depot-ctl;
+      depotPush = self'.packages.depot-push;
 
       serverUrl = "http://127.0.0.1:8080";
-      stateDir = "/var/lib/cache";
-      signingSecret = "${stateDir}/cache.sec";
-      signingPublic = "${stateDir}/cache.pub";
+      stateDir = "/var/lib/depot";
+      signingSecret = "${stateDir}/depot.sec";
+      signingPublic = "${stateDir}/depot.pub";
 
       s3Bucket = "repo-depot-test";
       s3AccessKey = "minioadmin";
@@ -113,7 +113,7 @@
           };
         };
 
-      mkCacheSubstituterTest =
+      mkDepotSubstituterTest =
         {
           name,
           appConfig ? { },
@@ -147,8 +147,8 @@
                   pkgs.curl
                   pkgs.nix
                   depotServer
-                  cacheCtl
-                  cachePush
+                  depotCtl
+                  depotPush
                 ];
 
                 nix.settings = {
@@ -176,7 +176,7 @@
                     mkdir -p ${stateDir}
 
                     if [ ! -f ${signingSecret} ]; then
-                      ${lib.getExe cacheCtl} keys generate \
+                      ${lib.getExe depotCtl} keys generate \
                         --name depot.example.com-1 \
                         --secret-file ${signingSecret} \
                         --public-file ${signingPublic}
@@ -186,7 +186,7 @@
                   serviceConfig = {
                     ExecStart = "${lib.getExe depotServer} --config ${depotServerConfig}";
                     Restart = "on-failure";
-                    StateDirectory = "cache";
+                    StateDirectory = "depot";
                   };
                 };
               }
@@ -215,7 +215,7 @@
 
             machine.succeed("rm -rf /tmp/e2e-source")
             machine.succeed("mkdir -p /tmp/e2e-source")
-            machine.succeed("printf 'hello from e2e cache\\n' > /tmp/e2e-source/hello.txt")
+            machine.succeed("printf 'hello from e2e depot\\n' > /tmp/e2e-source/hello.txt")
 
             store_path = machine.succeed(
               "nix-store --add-fixed --recursive sha256 /tmp/e2e-source"
@@ -243,7 +243,7 @@
             assert f"StorePath: {store_path}" in narinfo
             assert "Sig: depot.example.com-1:" in narinfo
 
-            # Force Nix to need the cache. The path was only created to publish it.
+            # Force Nix to need repo-depot. The path was only created to publish it.
             machine.succeed(f"nix-store --delete {store_path}")
             machine.fail(f"test -e {store_path}")
 
@@ -258,13 +258,13 @@
 
             machine.succeed(f"test -f {store_path}/hello.txt")
             restored = machine.succeed(f"cat {store_path}/hello.txt").strip()
-            assert restored == "hello from e2e cache"
+            assert restored == "hello from e2e depot"
           '';
         };
 
       e2eChecks = lib.optionalAttrs pkgs.stdenv.isLinux {
-        e2e-cache-substituter-fs = mkCacheSubstituterTest {
-          name = "e2e-cache-substituter-fs";
+        e2e-depot-substituter-fs = mkDepotSubstituterTest {
+          name = "e2e-depot-substituter-fs";
 
           appConfig = {
             storage = {
@@ -276,8 +276,8 @@
           };
         };
 
-        e2e-cache-substituter-s3 = mkCacheSubstituterTest {
-          name = "e2e-cache-substituter-s3";
+        e2e-depot-substituter-s3 = mkDepotSubstituterTest {
+          name = "e2e-depot-substituter-s3";
 
           appConfig = {
             storage = {

@@ -1,4 +1,4 @@
-pub mod cache_path;
+pub mod depot_path;
 pub mod key_crypto;
 pub mod narinfo;
 pub mod nix;

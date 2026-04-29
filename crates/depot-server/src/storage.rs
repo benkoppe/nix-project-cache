@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use depot_core::storage::StorageId;
 use depot_store::{
-    CacheStorage, FilesystemStorage, S3Storage, S3StorageConfig as RuntimeS3StorageConfig,
+    DepotStorage, FilesystemStorage, S3Storage, S3StorageConfig as RuntimeS3StorageConfig,
     StorageCatalog,
 };
 
@@ -159,10 +159,10 @@ impl TryFrom<RawStorageConfig> for StorageConfig {
 
 impl StorageConfig {
     pub fn catalog(&self) -> Result<StorageCatalog> {
-        let mut backends: BTreeMap<StorageId, Arc<dyn CacheStorage>> = BTreeMap::new();
+        let mut backends: BTreeMap<StorageId, Arc<dyn DepotStorage>> = BTreeMap::new();
 
         for (storage_id, backend) in &self.backends {
-            let storage: Arc<dyn CacheStorage> = match backend {
+            let storage: Arc<dyn DepotStorage> = match backend {
                 StorageBackendConfig::Filesystem(config) => {
                     Arc::new(FilesystemStorage::new(config.root.clone()))
                 }
@@ -193,7 +193,7 @@ impl S3StorageConfig {
 }
 
 fn default_object_root() -> PathBuf {
-    PathBuf::from("./cache_objects")
+    PathBuf::from("./depot_objects")
 }
 
 fn default_s3_region() -> String {

@@ -6,11 +6,11 @@ use depot_core::narinfo::{NarInfo, NarInfoRenderer, parse_narinfo};
 use depot_core::nix::{StoreDir, StorePathHash};
 use depot_core::project::ProjectSlug;
 use depot_core::signing::{NamedSigningKey, NarInfoSigner};
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 use depot_store::blob::{BlobBytes, BlobMetadata};
 use depot_store::upstream::UpstreamCacheClient;
 
-use crate::object_provider::CacheObjectProvider;
+use crate::object_provider::DepotObjectProvider;
 use crate::resolver::NarInfoResolver;
 use crate::signing_keys::DbProjectSigningKeys;
 use crate::upstreams::UpstreamSelector;
@@ -18,7 +18,7 @@ use crate::upstreams::UpstreamSelector;
 #[derive(Clone)]
 pub struct ReadService {
     local_resolver: Arc<dyn NarInfoResolver>,
-    object_provider: Arc<dyn CacheObjectProvider>,
+    object_provider: Arc<dyn DepotObjectProvider>,
     upstream_client: Arc<dyn UpstreamCacheClient>,
     upstream_selector: Arc<dyn UpstreamSelector>,
     renderer: NarInfoRenderer,
@@ -29,7 +29,7 @@ pub struct ReadService {
 impl ReadService {
     pub fn new(
         local_resolver: Arc<dyn NarInfoResolver>,
-        object_provider: Arc<dyn CacheObjectProvider>,
+        object_provider: Arc<dyn DepotObjectProvider>,
         upstream_client: Arc<dyn UpstreamCacheClient>,
         upstream_selector: Arc<dyn UpstreamSelector>,
         renderer: NarInfoRenderer,
@@ -51,16 +51,16 @@ impl ReadService {
         self.renderer.store_dir()
     }
 
-    pub async fn public_key_texts_for_view(&self, view: &CacheView) -> Result<Vec<String>> {
+    pub async fn public_key_texts_for_view(&self, view: &DepotView) -> Result<Vec<String>> {
         match view {
-            CacheView::Aggregate => Ok(self.aggregate_public_keys()),
-            CacheView::Project(project) => self.project_public_keys(project).await,
+            DepotView::Aggregate => Ok(self.aggregate_public_keys()),
+            DepotView::Project(project) => self.project_public_keys(project).await,
         }
     }
 
     pub async fn render_narinfo(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         store_path_hash: &StorePathHash,
     ) -> Result<Option<String>> {
         if let Some(narinfo) = self
@@ -87,7 +87,7 @@ impl ReadService {
 
     pub async fn get_object(
         &self,
-        view: &CacheView,
+        view: &DepotView,
         object_path: &str,
     ) -> Result<Option<(BlobMetadata, BlobBytes)>> {
         if let Some(result) = self.object_provider.get_object(view, object_path).await? {
@@ -107,7 +107,7 @@ impl ReadService {
         Ok(None)
     }
 
-    async fn render_signed_narinfo(&self, view: &CacheView, narinfo: NarInfo) -> Result<String> {
+    async fn render_signed_narinfo(&self, view: &DepotView, narinfo: NarInfo) -> Result<String> {
         let signing_keys = self.signing_keys_for_view(view).await?;
         let signer = NarInfoSigner::new(self.renderer.store_dir().clone(), signing_keys);
         let local_signatures = signer.sign(&narinfo)?;
@@ -120,10 +120,10 @@ impl ReadService {
             .render_with_signatures(&narinfo, &signatures)?)
     }
 
-    async fn signing_keys_for_view(&self, view: &CacheView) -> Result<Vec<NamedSigningKey>> {
+    async fn signing_keys_for_view(&self, view: &DepotView) -> Result<Vec<NamedSigningKey>> {
         match view {
-            CacheView::Aggregate => Ok(self.aggregate_signing_keys()),
-            CacheView::Project(project) => self.project_signing_keys_for_project(project).await,
+            DepotView::Aggregate => Ok(self.aggregate_signing_keys()),
+            DepotView::Project(project) => self.project_signing_keys_for_project(project).await,
         }
     }
 

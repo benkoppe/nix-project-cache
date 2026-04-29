@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 
 use crate::service::ReadService;
 
@@ -20,7 +20,7 @@ impl ReadAppState {
         }
     }
 
-    pub async fn nix_cache_info_text(&self, view: &CacheView) -> Result<String> {
+    pub async fn nix_cache_info_text(&self, view: &DepotView) -> Result<String> {
         let mut text = format!(
             "StoreDir: {}\nWantMassQuery: 1\nPriority: {}\n",
             self.read_service.store_dir(),

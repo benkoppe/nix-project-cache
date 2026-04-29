@@ -10,7 +10,7 @@ use depot_api::{
     PresignMultipartUploadPartRequest, PresignMultipartUploadPartResponse, RegisterPathsRequest,
     RegisterPathsResponse, S3MultipartUpload, UploadMethod,
 };
-use depot_core::cache_path::{CacheObjectPath, parse_cache_object_path};
+use depot_core::depot_path::{DepotObjectPath, parse_depot_object_path};
 use depot_core::narinfo::NarInfo;
 use depot_core::nix::{StoreDir, StorePathHash};
 use depot_core::project::ProjectSlug;
@@ -27,7 +27,7 @@ const PRESIGNED_MULTIPART_PART_TTL: Duration = Duration::from_secs(60 * 60);
 
 struct ValidatedUploadTarget {
     storage_id: StorageId,
-    storage: Arc<dyn depot_store::CacheStorage>,
+    storage: Arc<dyn depot_store::DepotStorage>,
 }
 
 #[derive(Clone)]
@@ -116,8 +116,8 @@ impl IngestService {
                 .context("deriving store path hash for path object linking")?;
             let object_path = narinfo.url.clone();
 
-            match parse_cache_object_path(&object_path) {
-                Some(CacheObjectPath::Nar { .. }) => {}
+            match parse_depot_object_path(&object_path) {
+                Some(DepotObjectPath::Nar { .. }) => {}
                 _ => continue,
             }
 
@@ -407,9 +407,9 @@ impl IngestService {
             return Err(anyhow!("build {} is not pending", build_id));
         }
 
-        match parse_cache_object_path(object_path) {
-            Some(CacheObjectPath::Nar { .. }) => {}
-            Some(CacheObjectPath::NarInfo { .. }) => {
+        match parse_depot_object_path(object_path) {
+            Some(DepotObjectPath::Nar { .. }) => {}
+            Some(DepotObjectPath::NarInfo { .. }) => {
                 return Err(anyhow!("clients must not upload narinfo objects directly"));
             }
             _ => return Err(anyhow!("invalid upload object path {}", object_path)),
@@ -465,7 +465,7 @@ mod tests {
     use depot_store::blob::{BlobBytes, BlobMetadata};
     use depot_store::upstream::InMemoryUpstreamCacheClient;
     use depot_store::{
-        CacheStorage, CompletedMultipartUpload, CompletedMultipartUploadPart, MultipartUpload,
+        CompletedMultipartUpload, CompletedMultipartUploadPart, DepotStorage, MultipartUpload,
         PresignedUploadPartUrl, UploadReader,
     };
     use depot_test_utils::{
@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl CacheStorage for FakeMultipartStorage {
+    impl DepotStorage for FakeMultipartStorage {
         async fn head(&self, object_path: &str) -> anyhow::Result<Option<BlobMetadata>> {
             Ok(self.objects.lock().unwrap().get(object_path).cloned())
         }
@@ -597,7 +597,7 @@ mod tests {
     }
 
     async fn build_service_with_storage(
-        storage: Arc<dyn CacheStorage>,
+        storage: Arc<dyn DepotStorage>,
     ) -> (IngestService, SqliteDatabase, TempDir) {
         let fixture = TestDatabase::new().await.unwrap();
         fixture.insert_example_project().await.unwrap();

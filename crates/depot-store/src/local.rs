@@ -40,7 +40,7 @@ pub struct CompletedMultipartUpload {
 }
 
 #[async_trait]
-pub trait CacheStorage: Send + Sync + 'static {
+pub trait DepotStorage: Send + Sync + 'static {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>>;
 
     async fn contains(&self, object_path: &str) -> Result<bool> {
@@ -154,7 +154,7 @@ impl FilesystemStorage {
 }
 
 #[async_trait]
-impl CacheStorage for FilesystemStorage {
+impl DepotStorage for FilesystemStorage {
     async fn head(&self, object_path: &str) -> Result<Option<BlobMetadata>> {
         let path = self.resolve_object_path(object_path)?;
 

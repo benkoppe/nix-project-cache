@@ -7,7 +7,7 @@ use depot_api::{
     ProjectRetentionRuleInfo, UpsertProjectOidcIdentityRequest,
     UpsertProjectRetentionPolicyRequest,
 };
-use depot_client::CacheClient;
+use depot_client::DepotClient;
 use depot_core::project::ProjectSlug;
 
 use crate::cli::{
@@ -20,7 +20,7 @@ use crate::cli::{
 use crate::output;
 
 pub async fn handle(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectsCommand,
@@ -39,7 +39,7 @@ pub async fn handle(
 }
 
 async fn list_projects(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
 ) -> Result<()> {
@@ -61,7 +61,7 @@ async fn list_projects(
 }
 
 async fn create_project(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: CreateProjectCommand,
@@ -99,7 +99,7 @@ async fn create_project(
 }
 
 async fn handle_oidc(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectOidcCommand,
@@ -118,7 +118,7 @@ async fn handle_oidc(
 }
 
 async fn list_oidc_identities(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ListProjectOidcCommand,
@@ -134,7 +134,7 @@ async fn list_oidc_identities(
 }
 
 async fn add_oidc_identity(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: AddProjectOidcCommand,
@@ -217,7 +217,7 @@ async fn add_oidc_identity(
 }
 
 async fn remove_oidc_identity(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: RemoveProjectOidcCommand,
@@ -275,7 +275,7 @@ async fn remove_oidc_identity(
 }
 
 async fn handle_retention(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectRetentionCommand,
@@ -294,7 +294,7 @@ async fn handle_retention(
 }
 
 async fn get_retention_policy(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: GetProjectRetentionCommand,
@@ -310,7 +310,7 @@ async fn get_retention_policy(
 }
 
 async fn set_retention_policy(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: SetProjectRetentionCommand,
@@ -341,7 +341,7 @@ async fn set_retention_policy(
 }
 
 async fn reset_retention_policy(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ResetProjectRetentionCommand,
@@ -653,7 +653,7 @@ fn format_duration_seconds(seconds: u64) -> String {
 }
 
 async fn handle_keys(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectKeysCommand,
@@ -672,7 +672,7 @@ async fn handle_keys(
 }
 
 async fn get_project_key(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectKeyProjectCommand,
@@ -696,7 +696,7 @@ async fn get_project_key(
 }
 
 async fn rotate_project_key(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectKeyRotateCommand,
@@ -723,7 +723,7 @@ async fn rotate_project_key(
 }
 
 async fn import_project_key(
-    client: &CacheClient,
+    client: &DepotClient,
     writer: &mut impl Write,
     json_output: bool,
     command: ProjectKeyImportCommand,
@@ -751,7 +751,7 @@ async fn import_project_key(
     Ok(())
 }
 
-async fn project_exists(client: &CacheClient, project: &ProjectSlug) -> Result<bool> {
+async fn project_exists(client: &DepotClient, project: &ProjectSlug) -> Result<bool> {
     let projects = client.list_projects().await.context("listing projects")?;
 
     Ok(projects.iter().any(|item| item.slug == project.as_str()))
@@ -882,8 +882,8 @@ mod tests {
         );
     }
 
-    fn client_for(server: &TestServer) -> CacheClient {
-        CacheClient::new(&server.base_url, "secret-token").unwrap()
+    fn client_for(server: &TestServer) -> DepotClient {
+        DepotClient::new(&server.base_url, "secret-token").unwrap()
     }
 
     #[tokio::test]

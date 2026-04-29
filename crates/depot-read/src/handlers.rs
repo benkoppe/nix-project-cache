@@ -2,9 +2,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use depot_core::cache_path::{CacheObjectPath, parse_cache_object_path};
+use depot_core::depot_path::{DepotObjectPath, parse_depot_object_path};
 use depot_core::project::ProjectSlug;
-use depot_core::view::CacheView;
+use depot_core::view::DepotView;
 
 use depot_store::blob::{BlobBytes, BlobMetadata};
 
@@ -15,7 +15,7 @@ pub async fn health() -> impl IntoResponse {
 }
 
 pub async fn aggregate_cache_info(State(state): State<ReadAppState>) -> Response {
-    cache_info_response(&state, &CacheView::Aggregate).await
+    cache_info_response(&state, &DepotView::Aggregate).await
 }
 
 pub async fn project_cache_info(
@@ -27,14 +27,14 @@ pub async fn project_cache_info(
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    cache_info_response(&state, &CacheView::Project(project)).await
+    cache_info_response(&state, &DepotView::Project(project)).await
 }
 
 pub async fn aggregate_object(
     Path(object): Path<String>,
     State(state): State<ReadAppState>,
 ) -> Response {
-    serve_object(CacheView::Aggregate, &object, &state).await
+    serve_object(DepotView::Aggregate, &object, &state).await
 }
 
 pub async fn project_object(
@@ -46,10 +46,10 @@ pub async fn project_object(
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    serve_object(CacheView::Project(project), &object, &state).await
+    serve_object(DepotView::Project(project), &object, &state).await
 }
 
-async fn cache_info_response(state: &ReadAppState, view: &CacheView) -> Response {
+async fn cache_info_response(state: &ReadAppState, view: &DepotView) -> Response {
     match state.nix_cache_info_text(view).await {
         Ok(text) => (
             [(
@@ -66,9 +66,9 @@ async fn cache_info_response(state: &ReadAppState, view: &CacheView) -> Response
     }
 }
 
-async fn serve_object(view: CacheView, object: &str, state: &ReadAppState) -> Response {
-    match parse_cache_object_path(object) {
-        Some(CacheObjectPath::NarInfo { store_path_hash }) => {
+async fn serve_object(view: DepotView, object: &str, state: &ReadAppState) -> Response {
+    match parse_depot_object_path(object) {
+        Some(DepotObjectPath::NarInfo { store_path_hash }) => {
             match state
                 .read_service
                 .render_narinfo(&view, &store_path_hash)
@@ -89,7 +89,7 @@ async fn serve_object(view: CacheView, object: &str, state: &ReadAppState) -> Re
                 }
             }
         }
-        Some(CacheObjectPath::Nar { .. }) => {
+        Some(DepotObjectPath::Nar { .. }) => {
             match state.read_service.get_object(&view, object).await {
                 Ok(Some((metadata, bytes))) => blob_response(metadata, bytes),
                 Ok(None) => StatusCode::NOT_FOUND.into_response(),

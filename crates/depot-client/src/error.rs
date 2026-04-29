@@ -2,7 +2,7 @@ use reqwest::StatusCode;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum CacheClientError {
+pub enum DepotClientError {
     #[error("invalid server url {url}: {message}")]
     InvalidServerUrl { url: String, message: String },
 

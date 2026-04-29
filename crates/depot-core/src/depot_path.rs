@@ -49,7 +49,7 @@ impl NarCompression {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CacheObjectPath {
+pub enum DepotObjectPath {
     NixCacheInfo,
     IndexHtml,
     NarInfo {
@@ -100,21 +100,21 @@ static REALISATION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^realisations/[a-z0-9]+:[a-zA-Z0-9+/=]+![a-zA-Z0-9_-]+\.doi$").unwrap()
 });
 
-pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
+pub fn parse_depot_object_path(path: &str) -> Option<DepotObjectPath> {
     if path.is_empty() || path.starts_with('/') || path.contains("..") {
         return None;
     }
 
     match path {
-        "nix-cache-info" => return Some(CacheObjectPath::NixCacheInfo),
-        "index.html" => return Some(CacheObjectPath::IndexHtml),
+        "nix-cache-info" => return Some(DepotObjectPath::NixCacheInfo),
+        "index.html" => return Some(DepotObjectPath::IndexHtml),
         _ => {}
     }
 
     if NARINFO_RE.is_match(path) {
         let hash_text = path.strip_suffix(".narinfo")?;
         let store_path_hash = StorePathHash::from_hash(hash_text).ok()?;
-        return Some(CacheObjectPath::NarInfo { store_path_hash });
+        return Some(DepotObjectPath::NarInfo { store_path_hash });
     }
 
     if let Some(captures) = NAR_RE.captures(path) {
@@ -127,7 +127,7 @@ pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
             Some(_) => return None,
         };
 
-        return Some(CacheObjectPath::Nar {
+        return Some(DepotObjectPath::Nar {
             nar_hash_digest: nar_hash,
             compression,
         });
@@ -136,17 +136,17 @@ pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
     if LS_RE.is_match(path) {
         let hash_text = path.strip_suffix(".ls")?;
         let store_path_hash = StorePathHash::from_hash(hash_text).ok()?;
-        return Some(CacheObjectPath::Listing { store_path_hash });
+        return Some(DepotObjectPath::Listing { store_path_hash });
     }
 
     if LOG_RE.is_match(path) {
-        return Some(CacheObjectPath::Log {
+        return Some(DepotObjectPath::Log {
             path: path.to_owned(),
         });
     }
 
     if REALISATION_RE.is_match(path) {
-        return Some(CacheObjectPath::Realisation {
+        return Some(DepotObjectPath::Realisation {
             path: path.to_owned(),
         });
     }
@@ -154,8 +154,8 @@ pub fn parse_cache_object_path(path: &str) -> Option<CacheObjectPath> {
     None
 }
 
-pub fn is_valid_cache_path(path: &str) -> bool {
-    parse_cache_object_path(path).is_some()
+pub fn is_valid_depot_path(path: &str) -> bool {
+    parse_depot_object_path(path).is_some()
 }
 
 #[cfg(test)]
@@ -163,7 +163,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid_cache_paths_match_go_baseline() {
+    fn valid_depot_paths_match_go_baseline() {
         let cases = [
             "26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo",
             "0123456789abcdfghijklmnpqrsvwxyz.narinfo",
@@ -179,12 +179,12 @@ mod tests {
         ];
 
         for case in cases {
-            assert!(is_valid_cache_path(case), "{case} should be valid");
+            assert!(is_valid_depot_path(case), "{case} should be valid");
         }
     }
 
     #[test]
-    fn invalid_cache_paths_match_go_baseline() {
+    fn invalid_depot_paths_match_go_baseline() {
         let cases = [
             "../etc/passwd",
             "nar/../../../etc/passwd",
@@ -198,17 +198,17 @@ mod tests {
         ];
 
         for case in cases {
-            assert!(!is_valid_cache_path(case), "{case} should be invalid");
+            assert!(!is_valid_depot_path(case), "{case} should be invalid");
         }
     }
 
     #[test]
     fn parses_narinfo_object_path() {
-        let parsed = parse_cache_object_path("26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo");
+        let parsed = parse_depot_object_path("26xbg1ndr7hbcncrlf9nhx5is2b25d13.narinfo");
 
         assert_eq!(
             parsed,
-            Some(CacheObjectPath::NarInfo {
+            Some(DepotObjectPath::NarInfo {
                 store_path_hash: StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13")
                     .unwrap(),
             })
@@ -217,13 +217,13 @@ mod tests {
 
     #[test]
     fn parses_nar_object_path() {
-        let parsed = parse_cache_object_path(
+        let parsed = parse_depot_object_path(
             "nar/1ngi2dxw1f7khrrjamzkkdai393lwcm8s78gvs1ag8k3n82w7bvp.nar.zst",
         );
 
         assert_eq!(
             parsed,
-            Some(CacheObjectPath::Nar {
+            Some(DepotObjectPath::Nar {
                 nar_hash_digest: "1ngi2dxw1f7khrrjamzkkdai393lwcm8s78gvs1ag8k3n82w7bvp".to_owned(),
                 compression: NarCompression::Zstd,
             })
@@ -232,11 +232,11 @@ mod tests {
 
     #[test]
     fn parses_listing_object_path() {
-        let parsed = parse_cache_object_path("26xbg1ndr7hbcncrlf9nhx5is2b25d13.ls");
+        let parsed = parse_depot_object_path("26xbg1ndr7hbcncrlf9nhx5is2b25d13.ls");
 
         assert_eq!(
             parsed,
-            Some(CacheObjectPath::Listing {
+            Some(DepotObjectPath::Listing {
                 store_path_hash: StorePathHash::from_hash("26xbg1ndr7hbcncrlf9nhx5is2b25d13")
                     .unwrap(),
             })

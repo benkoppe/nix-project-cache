@@ -70,7 +70,7 @@ impl PathObjectKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StorageRef {
-    CacheObject {
+    DepotObject {
         storage_id: String,
         object_path: String,
     },
