@@ -1,9 +1,0 @@
-[package]
-name = "cache-api"
-edition = "2024"
-version.workspace = true
-
-[dependencies]
-cache-core = { path = "../cache-core" }
-anyhow.workspace = true
-serde = { workspace = true, features = ["derive"] }

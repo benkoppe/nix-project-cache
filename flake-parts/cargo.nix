@@ -20,7 +20,7 @@
         root = unfilteredRoot;
         fileset = lib.fileset.unions [
           (craneLib.fileset.commonCargoSources unfilteredRoot)
-          ../crates/cache-db/migrations
+          ../crates/depot-db/migrations
           ../.sqlx
         ];
       };
@@ -43,7 +43,7 @@
         }
       );
 
-      cacheAppArgs = commonBuildArgs // {
+      depotServerArgs = commonBuildArgs // {
         src = workspaceSrc;
         inherit cargoArtifacts;
         doCheck = false;
@@ -52,7 +52,7 @@
       mkWorkspacePackage =
         pname:
         craneLib.buildPackage (
-          cacheAppArgs
+          depotServerArgs
           // {
             inherit pname;
             cargoExtraArgs = "-p ${pname}";
@@ -62,11 +62,11 @@
         );
 
       packages = rec {
-        default = cache-app;
+        default = depot-server;
 
-        cache-app = mkWorkspacePackage "cache-app";
-        cache-ctl = mkWorkspacePackage "cache-ctl";
-        cache-push = mkWorkspacePackage "cache-push";
+        depot-server = mkWorkspacePackage "depot-server";
+        depot-ctl = mkWorkspacePackage "depot-ctl";
+        depot-push = mkWorkspacePackage "depot-push";
       };
 
       checks = {
@@ -118,7 +118,7 @@
         pkgs.sqlite
         pkgs.rust-analyzer # lsp for agents
       ]
-      ++ config.cache-db.devShellPackages
+      ++ config.depot-db.devShellPackages
       ++ lib.optionals pkgs.stdenv.isDarwin [
         pkgs.libiconv
       ];
@@ -131,17 +131,17 @@
         packages = devShellPackages;
 
         shellHook = ''
-          ${config.cache-db.installationScript}
+          ${config.depot-db.installationScript}
           ${config.pre-commit.installationScript}
         '';
       };
 
       apps = {
-        cache-app = {
+        depot-server = {
           type = "app";
-          program = lib.getExe self'.packages.cache-app;
+          program = lib.getExe self'.packages.depot-server;
         };
-        default = apps.cache-app;
+        default = apps.depot-server;
       };
     };
 }

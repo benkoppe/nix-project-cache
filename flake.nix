@@ -1,5 +1,5 @@
 {
-  description = "A rust nix cache";
+  description = "repo-depot: a Rust Nix binary cache";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -24,7 +24,7 @@
         inputs.pre-commit-hooks.flakeModule
 
         ./flake-parts/cargo.nix
-        ./flake-parts/cache-db-tools.nix
+        ./flake-parts/depot-db-tools.nix
         ./flake-parts/git-hooks.nix
         ./flake-parts/e2e-tests.nix
       ];

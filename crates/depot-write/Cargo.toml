@@ -1,0 +1,33 @@
+[package]
+name = "depot-write"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+depot-api = { path = "../depot-api" }
+depot-auth = { path = "../depot-auth" }
+depot-core = { path = "../depot-core" }
+depot-store = { path = "../depot-store" }
+depot-db = { path = "../depot-db" }
+depot-ingest = { path = "../depot-ingest" }
+thiserror.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+http-body-util.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+wildmatch.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+depot-test-utils = { path = "../depot-test-utils" }
+depot-store = { path = "../depot-store" }
+bytes.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tower.workspace = true

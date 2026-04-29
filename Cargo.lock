@@ -653,264 +653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cache-api"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "cache-core",
- "serde",
-]
-
-[[package]]
-name = "cache-app"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "bytes",
- "cache-api",
- "cache-auth",
- "cache-client",
- "cache-core",
- "cache-db",
- "cache-ingest",
- "cache-read",
- "cache-store",
- "cache-test-utils",
- "cache-write",
- "clap",
- "figment",
- "reqwest",
- "serde",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "cache-auth"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "base64",
- "cache-test-utils",
- "jsonwebtoken",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "wildmatch",
-]
-
-[[package]]
-name = "cache-client"
-version = "0.0.1"
-dependencies = [
- "axum",
- "bytes",
- "cache-api",
- "cache-core",
- "cache-test-utils",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "cache-core"
-version = "0.0.1"
-dependencies = [
- "base64",
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.4.2",
- "hex",
- "regex",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
- "zstd",
-]
-
-[[package]]
-name = "cache-ctl"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "cache-api",
- "cache-client",
- "cache-core",
- "cache-test-utils",
- "clap",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "cache-db"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "cache-core",
- "cache-store",
- "hex",
- "sha2 0.11.0",
- "sqlx",
- "tempfile",
- "time",
- "tokio",
- "uuid",
- "wildmatch",
-]
-
-[[package]]
-name = "cache-ingest"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "cache-api",
- "cache-core",
- "cache-db",
- "cache-read",
- "cache-store",
- "cache-test-utils",
- "tempfile",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "cache-push"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "async-compression",
- "bytes",
- "cache-api",
- "cache-app",
- "cache-auth",
- "cache-client",
- "cache-core",
- "cache-store",
- "cache-test-utils",
- "clap",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "cache-read"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "bytes",
- "cache-core",
- "cache-db",
- "cache-store",
- "cache-test-utils",
- "http-body-util",
- "tempfile",
- "tokio",
- "tower",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "cache-store"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "aws-credential-types",
- "aws-sdk-s3",
- "axum",
- "bytes",
- "cache-core",
- "reqwest",
- "serde",
- "tempfile",
- "time",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "cache-test-utils"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "cache-api",
- "cache-core",
- "cache-db",
- "cache-store",
- "jsonwebtoken",
- "rsa",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "cache-write"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "cache-api",
- "cache-auth",
- "cache-core",
- "cache-db",
- "cache-ingest",
- "cache-store",
- "cache-test-utils",
- "futures-util",
- "http-body-util",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "uuid",
- "wildmatch",
-]
-
-[[package]]
 name = "cc"
 version = "1.2.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1250,6 +992,264 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "depot-api"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "depot-core",
+ "serde",
+]
+
+[[package]]
+name = "depot-auth"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "base64",
+ "depot-test-utils",
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "wildmatch",
+]
+
+[[package]]
+name = "depot-client"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "depot-api",
+ "depot-core",
+ "depot-test-utils",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "depot-core"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.4.2",
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "depot-ctl"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "depot-api",
+ "depot-client",
+ "depot-core",
+ "depot-test-utils",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "depot-db"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "depot-core",
+ "depot-store",
+ "hex",
+ "sha2 0.11.0",
+ "sqlx",
+ "tempfile",
+ "time",
+ "tokio",
+ "uuid",
+ "wildmatch",
+]
+
+[[package]]
+name = "depot-ingest"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "depot-api",
+ "depot-core",
+ "depot-db",
+ "depot-read",
+ "depot-store",
+ "depot-test-utils",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "depot-push"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "bytes",
+ "clap",
+ "depot-api",
+ "depot-auth",
+ "depot-client",
+ "depot-core",
+ "depot-server",
+ "depot-store",
+ "depot-test-utils",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
+name = "depot-read"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "depot-core",
+ "depot-db",
+ "depot-store",
+ "depot-test-utils",
+ "http-body-util",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "depot-server"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "depot-api",
+ "depot-auth",
+ "depot-client",
+ "depot-core",
+ "depot-db",
+ "depot-ingest",
+ "depot-read",
+ "depot-store",
+ "depot-test-utils",
+ "depot-write",
+ "figment",
+ "reqwest",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "depot-store"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "axum",
+ "bytes",
+ "depot-core",
+ "reqwest",
+ "serde",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "depot-test-utils"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "depot-api",
+ "depot-core",
+ "depot-db",
+ "depot-store",
+ "jsonwebtoken",
+ "rsa",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "depot-write"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "depot-api",
+ "depot-auth",
+ "depot-core",
+ "depot-db",
+ "depot-ingest",
+ "depot-store",
+ "depot-test-utils",
+ "futures-util",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "uuid",
+ "wildmatch",
 ]
 
 [[package]]

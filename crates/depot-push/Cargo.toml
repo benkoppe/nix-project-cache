@@ -1,0 +1,38 @@
+[package]
+name = "depot-push"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+depot-api = { path = "../depot-api" }
+depot-client = { path = "../depot-client" }
+depot-core = { path = "../depot-core" }
+anyhow.workspace = true
+async-compression.workspace = true
+bytes.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = [
+  "process",
+  "signal",
+  "io-util",
+  "fs",
+  "sync",
+] }
+tokio-stream = "0.1"
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+depot-server = { path = "../depot-server" }
+depot-auth = { path = "../depot-auth" }
+depot-core = { path = "../depot-core" }
+depot-store = { path = "../depot-store" }
+depot-test-utils = { path = "../depot-test-utils" }
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process"] }
+zstd.workspace = true

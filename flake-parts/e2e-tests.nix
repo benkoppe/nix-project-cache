@@ -3,16 +3,16 @@
   perSystem =
     { pkgs, self', ... }:
     let
-      cacheApp = self'.packages.cache-app;
-      cacheCtl = self'.packages.cache-ctl;
-      cachePush = self'.packages.cache-push;
+      depotServer = self'.packages.depot-server;
+      cacheCtl = self'.packages.depot-ctl;
+      cachePush = self'.packages.depot-push;
 
       serverUrl = "http://127.0.0.1:8080";
       stateDir = "/var/lib/cache";
       signingSecret = "${stateDir}/cache.sec";
       signingPublic = "${stateDir}/cache.pub";
 
-      s3Bucket = "nix-project-cache-test";
+      s3Bucket = "repo-depot-test";
       s3AccessKey = "minioadmin";
       s3SecretKey = "minioadmin";
       s3Endpoint = "http://127.0.0.1:9000";
@@ -67,7 +67,7 @@
               description = "Setup MinIO bucket";
               after = [ "minio.service" ];
               requires = [ "minio.service" ];
-              before = [ "cache-app.service" ];
+              before = [ "depot-server.service" ];
               wantedBy = [ "multi-user.target" ];
 
               environment = {
@@ -106,7 +106,7 @@
               };
             };
 
-            cache-app = {
+            depot-server = {
               after = [ "minio-setup.service" ];
               requires = [ "minio-setup.service" ];
             };
@@ -123,12 +123,12 @@
         let
           baseAppConfig = {
             server.bind_address = "127.0.0.1:8080";
-            database.path = "${stateDir}/cache.db";
+            database.path = "${stateDir}/depot.db";
             auth.write_token = "test-token";
             signing.aggregate_key_file = signingSecret;
           };
 
-          cacheAppConfig = toml.generate "${name}-cache-app.toml" (
+          depotServerConfig = toml.generate "${name}-depot-server.toml" (
             lib.recursiveUpdate baseAppConfig appConfig
           );
         in
@@ -146,7 +146,7 @@
                 environment.systemPackages = [
                   pkgs.curl
                   pkgs.nix
-                  cacheApp
+                  depotServer
                   cacheCtl
                   cachePush
                 ];
@@ -166,7 +166,7 @@
 
                 networking.firewall.enable = false;
 
-                systemd.services.cache-app = {
+                systemd.services.depot-server = {
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
 
@@ -177,14 +177,14 @@
 
                     if [ ! -f ${signingSecret} ]; then
                       ${lib.getExe cacheCtl} keys generate \
-                        --name cache.example.com-1 \
+                        --name depot.example.com-1 \
                         --secret-file ${signingSecret} \
                         --public-file ${signingPublic}
                       fi
                   '';
 
                   serviceConfig = {
-                    ExecStart = "${lib.getExe cacheApp} --config ${cacheAppConfig}";
+                    ExecStart = "${lib.getExe depotServer} --config ${depotServerConfig}";
                     Restart = "on-failure";
                     StateDirectory = "cache";
                   };
@@ -197,14 +197,14 @@
           testScript = ''
             machine.start()
             machine.wait_for_unit("multi-user.target")
-            machine.wait_for_unit("cache-app.service")
+            machine.wait_for_unit("depot-server.service")
 
             machine.wait_until_succeeds(
               "[ \"$(curl -sS -o /dev/null -w '%{http_code}' ${serverUrl}/__ready__)\" = 404 ]"
             )
 
             machine.succeed(
-              "cache-ctl "
+              "depot-ctl "
               "--server ${serverUrl} "
               "--auth-token test-token "
               "projects create example_repo "
@@ -222,7 +222,7 @@
             ).strip()
 
             machine.succeed(
-              "cache-push "
+              "depot-push "
               "--server ${serverUrl} "
               "--auth-token test-token "
               "--project example_repo "
@@ -241,7 +241,7 @@
             )
 
             assert f"StorePath: {store_path}" in narinfo
-            assert "Sig: cache.example.com-1:" in narinfo
+            assert "Sig: depot.example.com-1:" in narinfo
 
             # Force Nix to need the cache. The path was only created to publish it.
             machine.succeed(f"nix-store --delete {store_path}")
