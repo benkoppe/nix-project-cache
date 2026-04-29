@@ -21,8 +21,6 @@ metadata.crane.name = "nix-project-cache"
 [workspace.dependencies]
 aws-credential-types = "1"
 aws-sdk-s3 = "1"
-rusty-s3 = "0.9"
-url = "2.5"
 axum = { version = "0.8", features = ["http1", "tokio"] }
 async-trait = "0.1"
 http-body-util = "0.1"

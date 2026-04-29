@@ -16,6 +16,18 @@ pub fn write_router(state: WriteAppState) -> Router {
             put(handlers::upload_object),
         )
         .route(
+            "/api/builds/{build_id}/paths/{store_path_hash}/multipart/parts/{part_number}/url",
+            post(handlers::presign_multipart_upload_part),
+        )
+        .route(
+            "/api/builds/{build_id}/paths/{store_path_hash}/multipart/complete",
+            post(handlers::complete_multipart_upload),
+        )
+        .route(
+            "/api/builds/{build_id}/paths/{store_path_hash}/multipart/abort",
+            post(handlers::abort_multipart_upload),
+        )
+        .route(
             "/api/builds/{build_id}/finalize",
             post(handlers::finalize_build),
         )

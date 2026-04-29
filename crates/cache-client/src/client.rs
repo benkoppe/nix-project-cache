@@ -2,16 +2,18 @@ use std::fmt::Write as _;
 
 use reqwest::{Method, StatusCode, Url};
 use serde::de::DeserializeOwned;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio_util::io::ReaderStream;
 
 use cache_api::{
-    AccessTokenInfo, BeginBuildRequest, BeginBuildResponse, CreateAccessTokenRequest,
+    AbortMultipartUploadRequest, AccessTokenInfo, BeginBuildRequest, BeginBuildResponse,
+    CompleteMultipartUploadRequest, CompletedUploadPart, CreateAccessTokenRequest,
     CreateAccessTokenResponse, CreatePinRequest, DeleteProjectOidcIdentityRequest,
     FinalizeBuildResponse, GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest,
-    PinInfo, ProjectInfo, ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo,
-    ProjectSigningKeyInfo, ProjectSigningKeyResponse, RegisterPathsResponse, RunGcRequest,
-    RunGcResponse, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
+    PinInfo, PresignMultipartUploadPartRequest, PresignMultipartUploadPartResponse, ProjectInfo,
+    ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo, ProjectSigningKeyInfo,
+    ProjectSigningKeyResponse, RegisterPathsResponse, RunGcRequest, RunGcResponse,
+    S3MultipartUpload, UpsertProjectOidcIdentityRequest, UpsertProjectRequest,
     UpsertProjectRetentionPolicyRequest, UpsertUpstreamRequest, UpstreamInfo,
 };
 use cache_core::narinfo::NarInfo;
@@ -21,6 +23,8 @@ use cache_core::storage::StorageId;
 
 use crate::error::CacheClientError;
 use crate::routes;
+
+const MAX_MULTIPART_PARTS: i32 = 10_000;
 
 #[derive(Clone)]
 pub struct CacheClient {
@@ -133,6 +137,223 @@ impl CacheClient {
             .await?;
 
         self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn presign_multipart_upload_part(
+        &self,
+        build_id: &str,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        upload_id: &str,
+        part_number: i32,
+        content_length: u64,
+    ) -> Result<PresignMultipartUploadPartResponse, CacheClientError> {
+        let url = routes::presign_multipart_upload_part(
+            &self.base_url,
+            build_id,
+            store_path_hash,
+            part_number,
+        )?;
+
+        let response = self
+            .request(Method::POST, url)
+            .json(&PresignMultipartUploadPartRequest {
+                object_path: object_path.to_owned(),
+                upload_id: upload_id.to_owned(),
+                content_length,
+            })
+            .send()
+            .await?;
+
+        self.expect_json(response, &[StatusCode::OK]).await
+    }
+
+    pub async fn complete_multipart_upload(
+        &self,
+        build_id: &str,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        upload_id: &str,
+        parts: Vec<CompletedUploadPart>,
+        content_length: u64,
+    ) -> Result<(), CacheClientError> {
+        let url = routes::complete_multipart_upload(&self.base_url, build_id, store_path_hash)?;
+
+        let response = self
+            .request(Method::POST, url)
+            .json(&CompleteMultipartUploadRequest {
+                object_path: object_path.to_owned(),
+                upload_id: upload_id.to_owned(),
+                parts,
+                content_length,
+            })
+            .send()
+            .await?;
+
+        self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn abort_multipart_upload(
+        &self,
+        build_id: &str,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        upload_id: &str,
+    ) -> Result<(), CacheClientError> {
+        let url = routes::abort_multipart_upload(&self.base_url, build_id, store_path_hash)?;
+
+        let response = self
+            .request(Method::POST, url)
+            .json(&AbortMultipartUploadRequest {
+                object_path: object_path.to_owned(),
+                upload_id: upload_id.to_owned(),
+            })
+            .send()
+            .await?;
+
+        self.expect_empty(response, &[StatusCode::NO_CONTENT]).await
+    }
+
+    pub async fn upload_s3_multipart_reader<R>(
+        &self,
+        build_id: &str,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        upload: &S3MultipartUpload,
+        reader: R,
+    ) -> Result<(), CacheClientError>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        let result = self
+            .upload_s3_multipart_reader_inner(
+                build_id,
+                store_path_hash,
+                object_path,
+                upload,
+                reader,
+            )
+            .await;
+
+        if result.is_err()
+            && let Err(error) = self
+                .abort_multipart_upload(build_id, store_path_hash, object_path, &upload.upload_id)
+                .await
+        {
+            tracing::warn!(
+                ?error,
+                object_path,
+                upload_id = %upload.upload_id,
+                "failed to abort multipart upload after client upload failure"
+            );
+        }
+
+        result
+    }
+
+    async fn upload_s3_multipart_reader_inner<R>(
+        &self,
+        build_id: &str,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+        upload: &S3MultipartUpload,
+        mut reader: R,
+    ) -> Result<(), CacheClientError>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        let part_size =
+            usize::try_from(upload.part_size).map_err(|error| CacheClientError::ClientUpload {
+                message: format!("invalid multipart part size: {error}"),
+            })?;
+
+        let mut part_number = 1;
+        let mut total_content_length = 0_u64;
+        let mut completed_parts = Vec::new();
+
+        loop {
+            if part_number > MAX_MULTIPART_PARTS {
+                return Err(CacheClientError::ClientUpload {
+                    message: format!("multipart upload exceeded {MAX_MULTIPART_PARTS} parts"),
+                });
+            }
+
+            let Some(part_bytes) = read_next_upload_part(&mut reader, part_size).await? else {
+                break;
+            };
+
+            let content_length = u64::try_from(part_bytes.len()).map_err(|error| {
+                CacheClientError::ClientUpload {
+                    message: format!("invalid multipart part length: {error}"),
+                }
+            })?;
+
+            let presigned = self
+                .presign_multipart_upload_part(
+                    build_id,
+                    store_path_hash,
+                    object_path,
+                    &upload.upload_id,
+                    part_number,
+                    content_length,
+                )
+                .await?;
+
+            let etag = self
+                .upload_presigned_multipart_part(&presigned.url, part_bytes, content_length)
+                .await?;
+
+            total_content_length += content_length;
+            completed_parts.push(CompletedUploadPart { part_number, etag });
+            part_number += 1;
+        }
+
+        if completed_parts.is_empty() {
+            return Err(CacheClientError::ClientUpload {
+                message: "multipart upload produced no parts".to_owned(),
+            });
+        }
+
+        self.complete_multipart_upload(
+            build_id,
+            store_path_hash,
+            object_path,
+            &upload.upload_id,
+            completed_parts,
+            total_content_length,
+        )
+        .await
+    }
+
+    async fn upload_presigned_multipart_part(
+        &self,
+        url: &str,
+        bytes: bytes::Bytes,
+        content_length: u64,
+    ) -> Result<String, CacheClientError> {
+        let response = self
+            .http_client
+            .put(url)
+            .header(reqwest::header::CONTENT_LENGTH, content_length)
+            .body(bytes)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if ![StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT].contains(&status) {
+            return Err(self.unexpected_status(response, status).await);
+        }
+
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| CacheClientError::ClientUpload {
+                message: "presigned multipart part response missing ETag".to_owned(),
+            })?
+            .to_owned();
+
+        Ok(etag)
     }
 
     pub async fn upload_presigned_put_file(
@@ -542,6 +763,41 @@ impl CacheClient {
     }
 }
 
+async fn read_next_upload_part<R>(
+    reader: &mut R,
+    part_size: usize,
+) -> Result<Option<bytes::Bytes>, CacheClientError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = Vec::with_capacity(part_size);
+    let mut chunk = vec![0_u8; 64 * 1024];
+
+    while buffer.len() < part_size {
+        let remaining = part_size - buffer.len();
+        let read_size = remaining.min(chunk.len());
+
+        let bytes_read = reader
+            .read(&mut chunk[..read_size])
+            .await
+            .map_err(|error| CacheClientError::ClientUpload {
+                message: format!("reading multipart upload stream: {error}"),
+            })?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+    }
+
+    if buffer.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(bytes::Bytes::from(buffer)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -568,11 +824,30 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, Clone)]
+    struct MultipartPresignRequestRecord {
+        build_id: String,
+        store_path_hash: String,
+        part_number: i32,
+        request: cache_api::PresignMultipartUploadPartRequest,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct UploadedPartRecord {
+        part_number: i32,
+        body: Vec<u8>,
+    }
+
+    type SharedRecords<T> = Arc<Mutex<Vec<T>>>;
+
     #[derive(Default, Clone)]
     struct TestState {
         auth_headers: Arc<Mutex<Vec<String>>>,
         uploaded_paths: Arc<Mutex<Vec<(String, String, String)>>>,
         uploaded_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+        multipart_presign_requests: SharedRecords<MultipartPresignRequestRecord>,
+        uploaded_parts: SharedRecords<UploadedPartRecord>,
+        completed_multipart_uploads: SharedRecords<cache_api::CompleteMultipartUploadRequest>,
         pin_queries: Arc<Mutex<Vec<Option<String>>>>,
     }
 
@@ -654,6 +929,96 @@ mod tests {
             .unwrap()
             .push((build_id, store_path_hash, object_path));
         state.uploaded_bodies.lock().unwrap().push(body.to_vec());
+
+        StatusCode::NO_CONTENT
+    }
+
+    async fn presign_multipart_part_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path((build_id, store_path_hash, part_number)): Path<(String, String, i32)>,
+        Json(request): Json<cache_api::PresignMultipartUploadPartRequest>,
+    ) -> (
+        StatusCode,
+        Json<cache_api::PresignMultipartUploadPartResponse>,
+    ) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        state
+            .multipart_presign_requests
+            .lock()
+            .unwrap()
+            .push(MultipartPresignRequestRecord {
+                build_id,
+                store_path_hash,
+                part_number,
+                request: request.clone(),
+            });
+
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        (
+            StatusCode::OK,
+            Json(cache_api::PresignMultipartUploadPartResponse {
+                url: format!("http://{host}/multipart-parts/{part_number}"),
+                expires_at: "2030-01-01T00:00:00Z".to_owned(),
+            }),
+        )
+    }
+
+    async fn multipart_part_upload_handler(
+        State(state): State<TestState>,
+        Path(part_number): Path<i32>,
+        body: Bytes,
+    ) -> (StatusCode, HeaderMap) {
+        state
+            .uploaded_parts
+            .lock()
+            .unwrap()
+            .push(UploadedPartRecord {
+                part_number,
+                body: body.to_vec(),
+            });
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ETAG,
+            format!("\"part-{part_number}\"").parse().unwrap(),
+        );
+
+        (StatusCode::OK, headers)
+    }
+
+    async fn complete_multipart_upload_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path((build_id, store_path_hash)): Path<(String, String)>,
+        Json(request): Json<cache_api::CompleteMultipartUploadRequest>,
+    ) -> StatusCode {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(build_id, BUILD_ID);
+        assert_eq!(store_path_hash, hello_path().hash_str());
+
+        state
+            .completed_multipart_uploads
+            .lock()
+            .unwrap()
+            .push(request);
 
         StatusCode::NO_CONTENT
     }
@@ -962,6 +1327,104 @@ mod tests {
         assert_eq!(
             state.uploaded_bodies.lock().unwrap().as_slice(),
             &[b"hello streamed world".to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_s3_multipart_reader_uploads_parts_and_completes() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route(
+                "/api/builds/{build_id}/paths/{store_path_hash}/multipart/parts/{part_number}/url",
+                post(presign_multipart_part_handler),
+            )
+            .route(
+                "/api/builds/{build_id}/paths/{store_path_hash}/multipart/complete",
+                post(complete_multipart_upload_handler),
+            )
+            .route(
+                "/multipart-parts/{part_number}",
+                put(multipart_part_upload_handler),
+            )
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let path = hello_path();
+        let hash = path.hash();
+
+        client
+            .upload_s3_multipart_reader(
+                BUILD_ID,
+                &hash,
+                path.url(),
+                &cache_api::S3MultipartUpload {
+                    upload_id: "upload-123".to_owned(),
+                    part_size: 5,
+                },
+                std::io::Cursor::new(bytes::Bytes::from_static(b"hello-world!")),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.uploaded_parts.lock().unwrap().as_slice(),
+            &[
+                UploadedPartRecord {
+                    part_number: 1,
+                    body: b"hello".to_vec(),
+                },
+                UploadedPartRecord {
+                    part_number: 2,
+                    body: b"-worl".to_vec(),
+                },
+                UploadedPartRecord {
+                    part_number: 3,
+                    body: b"d!".to_vec(),
+                },
+            ]
+        );
+
+        let presign_requests = state.multipart_presign_requests.lock().unwrap();
+        assert_eq!(presign_requests.len(), 3);
+
+        assert_eq!(presign_requests[0].build_id, BUILD_ID);
+        assert_eq!(presign_requests[0].store_path_hash, hash.as_str());
+        assert_eq!(presign_requests[0].part_number, 1);
+        assert_eq!(presign_requests[0].request.object_path, path.url());
+        assert_eq!(presign_requests[0].request.upload_id, "upload-123");
+        assert_eq!(presign_requests[0].request.content_length, 5);
+
+        assert_eq!(presign_requests[1].part_number, 2);
+        assert_eq!(presign_requests[1].request.content_length, 5);
+
+        assert_eq!(presign_requests[2].part_number, 3);
+        assert_eq!(presign_requests[2].request.content_length, 2);
+
+        drop(presign_requests);
+
+        let completed = state.completed_multipart_uploads.lock().unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].object_path, path.url());
+        assert_eq!(completed[0].upload_id, "upload-123");
+        assert_eq!(completed[0].content_length, 12);
+        assert_eq!(completed[0].parts.len(), 3);
+
+        assert_eq!(completed[0].parts[0].part_number, 1);
+        assert_eq!(completed[0].parts[0].etag, "\"part-1\"");
+        assert_eq!(completed[0].parts[1].part_number, 2);
+        assert_eq!(completed[0].parts[1].etag, "\"part-2\"");
+        assert_eq!(completed[0].parts[2].part_number, 3);
+        assert_eq!(completed[0].parts[2].etag, "\"part-3\"");
+
+        assert_eq!(
+            state.auth_headers.lock().unwrap().as_slice(),
+            &[
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+            ]
         );
     }
 

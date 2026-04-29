@@ -7,8 +7,8 @@ pub mod upstream;
 pub use blob::{BlobBytes, BlobMetadata};
 pub use catalog::StorageCatalog;
 pub use local::{
-    CacheStorage, FilesystemStorage, InMemoryObjectStore, ObjectStore, PresignedPutUrl,
-    UploadReader,
+    CacheStorage, CompletedMultipartUpload, CompletedMultipartUploadPart, FilesystemStorage,
+    InMemoryObjectStore, MultipartUpload, ObjectStore, PresignedUploadPartUrl, UploadReader,
 };
 pub use s3::{S3Storage, S3StorageConfig};
 pub use upstream::{

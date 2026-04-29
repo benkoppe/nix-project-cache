@@ -31,6 +31,49 @@ pub fn upload_object(
     join(base_url, &format!("{prefix}{object_path}"))
 }
 
+pub fn presign_multipart_upload_part(
+    base_url: &Url,
+    build_id: &str,
+    store_path_hash: &StorePathHash,
+    part_number: i32,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!(
+            "api/builds/{build_id}/paths/{}/multipart/parts/{part_number}/url",
+            store_path_hash.as_str()
+        ),
+    )
+}
+
+pub fn complete_multipart_upload(
+    base_url: &Url,
+    build_id: &str,
+    store_path_hash: &StorePathHash,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!(
+            "api/builds/{build_id}/paths/{}/multipart/complete",
+            store_path_hash.as_str()
+        ),
+    )
+}
+
+pub fn abort_multipart_upload(
+    base_url: &Url,
+    build_id: &str,
+    store_path_hash: &StorePathHash,
+) -> Result<Url, CacheClientError> {
+    join(
+        base_url,
+        &format!(
+            "api/builds/{build_id}/paths/{}/multipart/abort",
+            store_path_hash.as_str()
+        ),
+    )
+}
+
 pub fn list_pins(base_url: &Url, project: Option<&ProjectSlug>) -> Result<Url, CacheClientError> {
     let mut url = join(base_url, "api/pins")?;
     if let Some(project) = project {

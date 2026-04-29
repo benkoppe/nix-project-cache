@@ -116,23 +116,23 @@ pub async fn push_paths(client: &CacheClient, options: PushOptions) -> Result<()
                             )
                         })?;
                 }
-                UploadMethod::PresignedPut { url, .. } => {
-                    let compressed = nix::compressed_nar_file_for_path(&store_path)
+                UploadMethod::S3Multipart(upload) => {
+                    let reader = nix::compressed_nar_reader_for_path(&store_path)
                         .await
-                        .with_context(|| format!("compressing NAR for {}", store_path))?;
-                    let file = compressed.open().await?;
+                        .with_context(|| format!("streaming NAR for {}", store_path))?;
 
                     client
-                        .upload_presigned_put_file(
-                            &url,
-                            file,
-                            compressed.size(),
-                            &required_upload.content_type,
+                        .upload_s3_multipart_reader(
+                            &build_id,
+                            &store_path_hash,
+                            &required_upload.object_path,
+                            &upload,
+                            reader,
                         )
                         .await
                         .with_context(|| {
                             format!(
-                                "uploading {} directly for {}",
+                                "uploading {} via S3 multipart for {}",
                                 required_upload.object_path, store_path
                             )
                         })?;

@@ -10,14 +10,14 @@ async-trait.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 bytes.workspace = true
-rusty-s3.workspace = true
-url.workspace = true
 reqwest.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util"] }
 uuid.workspace = true
 tempfile.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+serde.workspace = true
 axum.workspace = true
 tokio.workspace = true
