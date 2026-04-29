@@ -949,4 +949,76 @@ mod tests {
         let build = db.get_build(build_id).await.unwrap().unwrap();
         assert_eq!(build.status, BuildStatus::Finalized);
     }
+
+    #[tokio::test]
+    async fn complete_multipart_upload_links_path_object_and_finalize_succeeds() {
+        let storage = Arc::new(FakeMultipartStorage::default());
+        let (service, db, _tmp) = build_service_with_storage(storage).await;
+
+        let path = hello_path();
+        let payload = path.payload();
+        let hash = path.hash();
+
+        let begin = service
+            .begin_build(BeginBuildRequest {
+                project: EXAMPLE_PROJECT_SLUG.to_owned(),
+                ref_name: "main".to_owned(),
+                revision: Some("deadbeef".to_owned()),
+            })
+            .await
+            .unwrap();
+
+        let build_id = Uuid::parse_str(&begin.build_id).unwrap();
+
+        service
+            .register_paths(RegisterPathsRequest {
+                build_id: begin.build_id.clone(),
+                paths: vec![payload.clone()],
+            })
+            .await
+            .unwrap();
+
+        service
+            .complete_multipart_upload(
+                build_id,
+                &hash,
+                CompleteMultipartUploadRequest {
+                    object_path: payload.url.clone(),
+                    upload_id: format!("upload-for-{}", payload.url),
+                    parts: vec![
+                        cache_api::CompletedUploadPart {
+                            part_number: 1,
+                            etag: "\"part-1\"".to_owned(),
+                        },
+                        cache_api::CompletedUploadPart {
+                            part_number: 2,
+                            etag: "\"part-2\"".to_owned(),
+                        },
+                    ],
+                    content_length: 123,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            db.path_has_object(&hash, &payload.url, PathObjectKind::Nar)
+                .await
+                .unwrap()
+        );
+
+        let records = db.list_storage_objects(&payload.url).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].metadata.content_length, Some(123));
+
+        service
+            .finalize_build(FinalizeBuildRequest {
+                build_id: begin.build_id.clone(),
+            })
+            .await
+            .unwrap();
+
+        let build = db.get_build(build_id).await.unwrap().unwrap();
+        assert_eq!(build.status, BuildStatus::Finalized);
+    }
 }

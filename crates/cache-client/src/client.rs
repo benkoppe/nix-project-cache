@@ -829,6 +829,18 @@ mod tests {
         auth_headers: Arc<Mutex<Vec<String>>>,
         uploaded_paths: Arc<Mutex<Vec<(String, String, String)>>>,
         uploaded_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+        multipart_presign_requests: Arc<
+            Mutex<
+                Vec<(
+                    String,
+                    String,
+                    i32,
+                    cache_api::PresignMultipartUploadPartRequest,
+                )>,
+            >,
+        >,
+        uploaded_parts: Arc<Mutex<Vec<(i32, Vec<u8>)>>>,
+        completed_multipart_uploads: Arc<Mutex<Vec<cache_api::CompleteMultipartUploadRequest>>>,
         pin_queries: Arc<Mutex<Vec<Option<String>>>>,
     }
 
@@ -910,6 +922,89 @@ mod tests {
             .unwrap()
             .push((build_id, store_path_hash, object_path));
         state.uploaded_bodies.lock().unwrap().push(body.to_vec());
+
+        StatusCode::NO_CONTENT
+    }
+
+    async fn presign_multipart_part_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path((build_id, store_path_hash, part_number)): Path<(String, String, i32)>,
+        Json(request): Json<cache_api::PresignMultipartUploadPartRequest>,
+    ) -> (
+        StatusCode,
+        Json<cache_api::PresignMultipartUploadPartResponse>,
+    ) {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        state.multipart_presign_requests.lock().unwrap().push((
+            build_id,
+            store_path_hash,
+            part_number,
+            request.clone(),
+        ));
+
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        (
+            StatusCode::OK,
+            Json(cache_api::PresignMultipartUploadPartResponse {
+                url: format!("http://{host}/multipart-parts/{part_number}"),
+                expires_at: "2030-01-01T00:00:00Z".to_owned(),
+            }),
+        )
+    }
+
+    async fn multipart_part_upload_handler(
+        State(state): State<TestState>,
+        Path(part_number): Path<i32>,
+        body: Bytes,
+    ) -> (StatusCode, HeaderMap) {
+        state
+            .uploaded_parts
+            .lock()
+            .unwrap()
+            .push((part_number, body.to_vec()));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ETAG,
+            format!("\"part-{part_number}\"").parse().unwrap(),
+        );
+
+        (StatusCode::OK, headers)
+    }
+
+    async fn complete_multipart_upload_handler(
+        State(state): State<TestState>,
+        headers: HeaderMap,
+        Path((build_id, store_path_hash)): Path<(String, String)>,
+        Json(request): Json<cache_api::CompleteMultipartUploadRequest>,
+    ) -> StatusCode {
+        state.auth_headers.lock().unwrap().push(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        );
+
+        assert_eq!(build_id, BUILD_ID);
+        assert_eq!(store_path_hash, hello_path().hash_str());
+
+        state
+            .completed_multipart_uploads
+            .lock()
+            .unwrap()
+            .push(request);
 
         StatusCode::NO_CONTENT
     }
@@ -1218,6 +1313,95 @@ mod tests {
         assert_eq!(
             state.uploaded_bodies.lock().unwrap().as_slice(),
             &[b"hello streamed world".to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_s3_multipart_reader_uploads_parts_and_completes() {
+        let state = TestState::default();
+        let app = Router::new()
+            .route(
+                "/api/builds/{build_id}/paths/{store_path_hash}/multipart/parts/{part_number}/url",
+                post(presign_multipart_part_handler),
+            )
+            .route(
+                "/api/builds/{build_id}/paths/{store_path_hash}/multipart/complete",
+                post(complete_multipart_upload_handler),
+            )
+            .route(
+                "/multipart-parts/{part_number}",
+                put(multipart_part_upload_handler),
+            )
+            .with_state(state.clone());
+
+        let server = TestServer::spawn(app).await.unwrap();
+        let client = CacheClient::new(&server.base_url, "secret-token").unwrap();
+        let path = hello_path();
+        let hash = path.hash();
+
+        client
+            .upload_s3_multipart_reader(
+                BUILD_ID,
+                &hash,
+                path.url(),
+                &cache_api::S3MultipartUpload {
+                    upload_id: "upload-123".to_owned(),
+                    part_size: 5,
+                },
+                std::io::Cursor::new(bytes::Bytes::from_static(b"hello-world!")),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.uploaded_parts.lock().unwrap().as_slice(),
+            &[
+                (1, b"hello".to_vec()),
+                (2, b"-worl".to_vec()),
+                (3, b"d!".to_vec()),
+            ]
+        );
+
+        let presign_requests = state.multipart_presign_requests.lock().unwrap();
+        assert_eq!(presign_requests.len(), 3);
+
+        assert_eq!(presign_requests[0].0, BUILD_ID);
+        assert_eq!(presign_requests[0].1, hash.as_str());
+        assert_eq!(presign_requests[0].2, 1);
+        assert_eq!(presign_requests[0].3.object_path, path.url());
+        assert_eq!(presign_requests[0].3.upload_id, "upload-123");
+        assert_eq!(presign_requests[0].3.content_length, 5);
+
+        assert_eq!(presign_requests[1].2, 2);
+        assert_eq!(presign_requests[1].3.content_length, 5);
+
+        assert_eq!(presign_requests[2].2, 3);
+        assert_eq!(presign_requests[2].3.content_length, 2);
+
+        drop(presign_requests);
+
+        let completed = state.completed_multipart_uploads.lock().unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].object_path, path.url());
+        assert_eq!(completed[0].upload_id, "upload-123");
+        assert_eq!(completed[0].content_length, 12);
+        assert_eq!(completed[0].parts.len(), 3);
+
+        assert_eq!(completed[0].parts[0].part_number, 1);
+        assert_eq!(completed[0].parts[0].etag, "\"part-1\"");
+        assert_eq!(completed[0].parts[1].part_number, 2);
+        assert_eq!(completed[0].parts[1].etag, "\"part-2\"");
+        assert_eq!(completed[0].parts[2].part_number, 3);
+        assert_eq!(completed[0].parts[2].etag, "\"part-3\"");
+
+        assert_eq!(
+            state.auth_headers.lock().unwrap().as_slice(),
+            &[
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+                "Bearer secret-token".to_owned(),
+            ]
         );
     }
 

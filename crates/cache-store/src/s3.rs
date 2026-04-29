@@ -870,6 +870,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_stream_writes_object_with_multipart_and_returns_size() {
+        let server = FakeS3Server::start().await;
+        let storage = server.storage();
+
+        let payload = Bytes::from_static(b"streamed-object");
+        let reader: UploadReader = Box::pin(std::io::Cursor::new(payload.clone()));
+
+        let written = storage
+            .put_stream("nar/streamed.nar", reader)
+            .await
+            .unwrap();
+
+        assert_eq!(written, 15);
+
+        assert_eq!(server.stored("test-bucket/nar/streamed.nar"), Some(payload))
+    }
+
+    #[tokio::test]
     async fn presigned_multipart_part_uploads_to_prefixed_key() {
         let server = FakeS3Server::start().await;
         let storage = server.storage_with_prefix("/cache-objects/");
