@@ -5,8 +5,10 @@ use anyhow::{Context as _, Result, anyhow};
 use uuid::Uuid;
 
 use cache_api::{
-    BeginBuildRequest, BeginBuildResponse, FinalizeBuildRequest, FinalizeBuildResponse,
-    RegisterPathsRequest, RegisterPathsResponse, UploadMethod,
+    AbortMultipartUploadRequest, BeginBuildRequest, BeginBuildResponse,
+    CompleteMultipartUploadRequest, FinalizeBuildRequest, FinalizeBuildResponse,
+    PresignMultipartUploadPartRequest, PresignMultipartUploadPartResponse, RegisterPathsRequest,
+    RegisterPathsResponse, S3MultipartUpload, UploadMethod,
 };
 use cache_core::cache_path::{CacheObjectPath, parse_cache_object_path};
 use cache_core::narinfo::NarInfo;
@@ -17,11 +19,16 @@ use cache_core::validation::validate_publish_narinfo;
 use cache_db::{BuildStatus, SqliteDatabase};
 use cache_store::blob::BlobMetadata;
 use cache_store::upstream::{UpstreamCache, UpstreamCacheClient};
-use cache_store::{StorageCatalog, UploadReader};
+use cache_store::{CompletedMultipartUploadPart, StorageCatalog, UploadReader};
 
 use crate::planner::plan_required_uploads;
 
-const PRESIGNED_PUT_TTL: Duration = Duration::from_secs(60 * 60);
+const PRESIGNED_MULTIPART_PART_TTL: Duration = Duration::from_secs(60 * 60);
+
+struct ValidatedUploadTarget {
+    storage_id: StorageId,
+    storage: Arc<dyn cache_store::CacheStorage>,
+}
 
 #[derive(Clone)]
 pub struct IngestService {
@@ -128,13 +135,13 @@ impl IngestService {
 
         for planned_upload in planned {
             let method = match storage
-                .presigned_put_url(&planned_upload.object_path, PRESIGNED_PUT_TTL)
+                .create_multipart_upload(&planned_upload.object_path)
                 .await?
             {
-                Some(url) => UploadMethod::PresignedPut {
-                    url: url.url,
-                    expires_at: url.expires_at.to_string(),
-                },
+                Some(upload) => UploadMethod::S3Multipart(S3MultipartUpload {
+                    upload_id: upload.upload_id,
+                    part_size: upload.part_size,
+                }),
                 None => UploadMethod::Proxy,
             };
 
@@ -151,58 +158,17 @@ impl IngestService {
         object_path: &str,
         body: UploadReader,
     ) -> Result<()> {
-        let build_context = self
-            .db
-            .get_build_context(build_id)
-            .await?
-            .ok_or_else(|| anyhow!("build {} not found", build_id))?;
-
-        if build_context.status != BuildStatus::Pending {
-            return Err(anyhow!("build {} is not pending", build_id));
-        }
-
-        match parse_cache_object_path(object_path) {
-            Some(CacheObjectPath::Nar { .. }) => {}
-            Some(CacheObjectPath::NarInfo { .. }) => {
-                return Err(anyhow!("clients must not upload narinfo objects directly"));
-            }
-            _ => return Err(anyhow!("invalid upload object path {}", object_path)),
-        }
-
-        let Some(narinfo) = self
-            .db
-            .get_build_path_narinfo(build_id, store_path_hash)
-            .await?
-        else {
-            return Err(anyhow!(
-                "build {} does not include path {}",
-                build_id,
-                store_path_hash.as_str()
-            ));
-        };
-
-        let expected_object_path = narinfo.url.as_str();
-
-        if object_path != expected_object_path {
-            return Err(anyhow!(
-                "object path {} does not match registered nar {} for path {}",
-                object_path,
-                expected_object_path,
-                store_path_hash.as_str(),
-            ));
-        }
-
-        let storage_id = self
-            .storage_id_for_project(&build_context.project_slug)
+        let target = self
+            .validate_upload_target(build_id, store_path_hash, object_path)
             .await?;
-        let storage = self.storage_catalog.storage(&storage_id)?;
-        let written = storage.put_stream(object_path, body).await?;
+
+        let written = target.storage.put_stream(object_path, body).await?;
 
         let metadata = BlobMetadata::new("application/octet-stream", Some(written), None, None);
 
         let persist_result = async {
             self.db
-                .upsert_storage_object(&storage_id, object_path, &metadata)
+                .upsert_storage_object(&target.storage_id, object_path, &metadata)
                 .await?;
             self.db
                 .link_path_object(store_path_hash, object_path, PathObjectKind::Nar)
@@ -213,10 +179,119 @@ impl IngestService {
         .await;
 
         if persist_result.is_err() {
-            let _ = storage.delete(object_path).await;
+            let _ = target.storage.delete(object_path).await;
         }
 
         persist_result
+    }
+
+    pub async fn presign_multipart_upload_part(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+        part_number: i32,
+        request: PresignMultipartUploadPartRequest,
+    ) -> Result<PresignMultipartUploadPartResponse> {
+        let target = self
+            .validate_upload_target(build_id, store_path_hash, &request.object_path)
+            .await?;
+
+        let url = target
+            .storage
+            .presign_multipart_upload_part(
+                &request.object_path,
+                &request.upload_id,
+                part_number,
+                request.content_length,
+                PRESIGNED_MULTIPART_PART_TTL,
+            )
+            .await?
+            .ok_or_else(|| anyhow!("storage backend does not support multipart uploads"))?;
+
+        Ok(PresignMultipartUploadPartResponse {
+            url: url.url,
+            expires_at: url.expires_at.to_string(),
+        })
+    }
+
+    pub async fn complete_multipart_upload(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+        request: CompleteMultipartUploadRequest,
+    ) -> Result<()> {
+        let target = self
+            .validate_upload_target(build_id, store_path_hash, &request.object_path)
+            .await?;
+
+        let parts = request
+            .parts
+            .into_iter()
+            .map(|part| CompletedMultipartUploadPart {
+                part_number: part.part_number,
+                etag: part.etag,
+            })
+            .collect();
+
+        let completed = target
+            .storage
+            .complete_multipart_upload(
+                &request.object_path,
+                &request.upload_id,
+                parts,
+                request.content_length,
+            )
+            .await?;
+
+        // The client reports the compressed object length because data flows directly to S3.
+        // We trust authenticated writers here; S3 does not expose the total multipart length
+        // in the completion response without an additional HEAD request.
+        let metadata = BlobMetadata::new(
+            "application/octet-stream",
+            Some(completed.content_length),
+            completed.e_tag,
+            None,
+        );
+
+        let persist_result = async {
+            self.db
+                .upsert_storage_object(&target.storage_id, &request.object_path, &metadata)
+                .await?;
+            self.db
+                .link_path_object(store_path_hash, &request.object_path, PathObjectKind::Nar)
+                .await?;
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        if persist_result.is_err()
+            && let Err(error) = target.storage.delete(&request.object_path).await
+        {
+            tracing::warn!(
+                ?error,
+                object_path = %request.object_path,
+                "failed to clean up multipart object after metadata persistence failure"
+            );
+        }
+
+        persist_result
+    }
+
+    pub async fn abort_multipart_upload(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+        request: AbortMultipartUploadRequest,
+    ) -> Result<()> {
+        let target = self
+            .validate_upload_target(build_id, store_path_hash, &request.object_path)
+            .await?;
+
+        target
+            .storage
+            .abort_multipart_upload(&request.object_path, &request.upload_id)
+            .await
     }
 
     pub async fn finalize_build(
@@ -315,6 +390,62 @@ impl IngestService {
     async fn storage_id_for_project(&self, project_slug: &ProjectSlug) -> Result<StorageId> {
         self.db.get_project_storage_id(project_slug).await
     }
+
+    async fn validate_upload_target(
+        &self,
+        build_id: Uuid,
+        store_path_hash: &StorePathHash,
+        object_path: &str,
+    ) -> Result<ValidatedUploadTarget> {
+        let build_context = self
+            .db
+            .get_build_context(build_id)
+            .await?
+            .ok_or_else(|| anyhow!("build {} not found", build_id))?;
+
+        if build_context.status != BuildStatus::Pending {
+            return Err(anyhow!("build {} is not pending", build_id));
+        }
+
+        match parse_cache_object_path(object_path) {
+            Some(CacheObjectPath::Nar { .. }) => {}
+            Some(CacheObjectPath::NarInfo { .. }) => {
+                return Err(anyhow!("clients must not upload narinfo objects directly"));
+            }
+            _ => return Err(anyhow!("invalid upload object path {}", object_path)),
+        }
+
+        let Some(narinfo) = self
+            .db
+            .get_build_path_narinfo(build_id, store_path_hash)
+            .await?
+        else {
+            return Err(anyhow!(
+                "build {} does not include path {}",
+                build_id,
+                store_path_hash.as_str()
+            ));
+        };
+
+        if object_path != narinfo.url {
+            return Err(anyhow!(
+                "object path {} does not match registered nar {} for path {}",
+                object_path,
+                narinfo.url,
+                store_path_hash.as_str(),
+            ));
+        }
+
+        let storage_id = self
+            .storage_id_for_project(&build_context.project_slug)
+            .await?;
+        let storage = self.storage_catalog.storage(&storage_id)?;
+
+        Ok(ValidatedUploadTarget {
+            storage_id,
+            storage,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -333,7 +464,10 @@ mod tests {
     use cache_db::{BuildStatus, SqliteDatabase};
     use cache_store::blob::{BlobBytes, BlobMetadata};
     use cache_store::upstream::InMemoryUpstreamCacheClient;
-    use cache_store::{CacheStorage, PresignedPutUrl};
+    use cache_store::{
+        CacheStorage, CompletedMultipartUpload, CompletedMultipartUploadPart, MultipartUpload,
+        PresignedUploadPartUrl, UploadReader,
+    };
     use cache_test_utils::{
         EXAMPLE_PROJECT_SLUG, TestDatabase, duplex_reader, example_project, filesystem_storage_in,
         hello_path, sample_upstream,
@@ -342,11 +476,11 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct FakePresignedStorage {
+    struct FakeMultipartStorage {
         objects: Mutex<HashMap<String, BlobMetadata>>,
     }
 
-    impl FakePresignedStorage {
+    impl FakeMultipartStorage {
         fn insert(&self, object_path: impl Into<String>, metadata: BlobMetadata) {
             self.objects
                 .lock()
@@ -356,7 +490,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl CacheStorage for FakePresignedStorage {
+    impl CacheStorage for FakeMultipartStorage {
         async fn head(&self, object_path: &str) -> anyhow::Result<Option<BlobMetadata>> {
             Ok(self.objects.lock().unwrap().get(object_path).cloned())
         }
@@ -370,7 +504,7 @@ mod tests {
                 object_path,
                 BlobMetadata::new(
                     "application/octet-stream",
-                    Some(bytes.len() as u64),
+                    Some(u64::try_from(bytes.len()).unwrap()),
                     None,
                     None,
                 ),
@@ -386,15 +520,56 @@ mod tests {
             anyhow::bail!("proxy upload should not be used in this test")
         }
 
-        async fn presigned_put_url(
+        async fn create_multipart_upload(
             &self,
             object_path: &str,
+        ) -> anyhow::Result<Option<MultipartUpload>> {
+            Ok(Some(MultipartUpload {
+                upload_id: format!("upload-for-{object_path}"),
+                part_size: 16 * 1024 * 1024,
+            }))
+        }
+
+        async fn presign_multipart_upload_part(
+            &self,
+            object_path: &str,
+            upload_id: &str,
+            part_number: i32,
+            content_length: u64,
             _expires_in: Duration,
-        ) -> anyhow::Result<Option<PresignedPutUrl>> {
-            Ok(Some(PresignedPutUrl {
-                url: format!("https://uploads.example.invalid/{object_path}"),
+        ) -> anyhow::Result<Option<PresignedUploadPartUrl>> {
+            Ok(Some(PresignedUploadPartUrl {
+                url: format!(
+                    "https://uploads.example.invalid/{object_path}?uploadId={upload_id}&partNumber={part_number}&contentLength={content_length}"
+                ),
                 expires_at: OffsetDateTime::now_utc() + time::Duration::hours(1),
             }))
+        }
+
+        async fn complete_multipart_upload(
+            &self,
+            object_path: &str,
+            _upload_id: &str,
+            _parts: Vec<CompletedMultipartUploadPart>,
+            content_length: u64,
+        ) -> anyhow::Result<CompletedMultipartUpload> {
+            self.insert(
+                object_path,
+                BlobMetadata::new("application/octet-stream", Some(content_length), None, None),
+            );
+
+            Ok(CompletedMultipartUpload {
+                content_length,
+                e_tag: None,
+            })
+        }
+
+        async fn abort_multipart_upload(
+            &self,
+            _object_path: &str,
+            _upload_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
         }
 
         async fn delete(&self, object_path: &str) -> anyhow::Result<()> {
@@ -686,8 +861,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_paths_returns_presigned_put_when_storage_supports_it() {
-        let storage = Arc::new(FakePresignedStorage::default());
+    async fn register_paths_returns_s3_multipart_when_storage_supports_it() {
+        let storage = Arc::new(FakeMultipartStorage::default());
         let (service, _db, _tmp) = build_service_with_storage(storage).await;
 
         let path = hello_path();
@@ -714,18 +889,17 @@ mod tests {
         assert_eq!(register.required_uploads[0].object_path, payload.url);
 
         match &register.required_uploads[0].method {
-            UploadMethod::PresignedPut { url, expires_at } => {
-                assert!(url.contains("uploads.example.invalid"));
-                assert!(url.contains(&payload.url));
-                assert!(!expires_at.is_empty());
+            UploadMethod::S3Multipart(upload) => {
+                assert_eq!(upload.upload_id, format!("upload-for-{}", payload.url));
+                assert_eq!(upload.part_size, 16 * 1024 * 1024);
             }
-            UploadMethod::Proxy => panic!("expected presigned PUT upload method"),
+            UploadMethod::Proxy => panic!("expected S3 multipart upload method"),
         }
     }
 
     #[tokio::test]
     async fn finalize_links_direct_uploaded_object_found_by_storage_head() {
-        let storage = Arc::new(FakePresignedStorage::default());
+        let storage = Arc::new(FakeMultipartStorage::default());
         let (service, db, _tmp) = build_service_with_storage(storage.clone()).await;
 
         let path = hello_path();

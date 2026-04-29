@@ -10,8 +10,11 @@ pub mod upstreams;
 
 pub use access_tokens::{AccessTokenInfo, CreateAccessTokenRequest, CreateAccessTokenResponse};
 pub use builds::{
-    BeginBuildRequest, BeginBuildResponse, FinalizeBuildRequest, FinalizeBuildResponse,
-    NarInfoPayload, RegisterPathsRequest, RegisterPathsResponse, RequiredUpload, UploadMethod,
+    AbortMultipartUploadRequest, BeginBuildRequest, BeginBuildResponse,
+    CompleteMultipartUploadRequest, CompletedUploadPart, FinalizeBuildRequest,
+    FinalizeBuildResponse, NarInfoPayload, PresignMultipartUploadPartRequest,
+    PresignMultipartUploadPartResponse, RegisterPathsRequest, RegisterPathsResponse,
+    RequiredUpload, S3MultipartUpload, UploadMethod,
 };
 pub use gc::{RunGcRequest, RunGcResponse};
 pub use oidc_identities::{

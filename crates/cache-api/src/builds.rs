@@ -38,7 +38,46 @@ pub struct RegisterPathsRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UploadMethod {
     Proxy,
-    PresignedPut { url: String, expires_at: String },
+    S3Multipart(S3MultipartUpload),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3MultipartUpload {
+    pub upload_id: String,
+    pub part_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresignMultipartUploadPartRequest {
+    pub object_path: String,
+    pub upload_id: String,
+    pub content_length: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresignMultipartUploadPartResponse {
+    pub url: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletedUploadPart {
+    pub part_number: i32,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteMultipartUploadRequest {
+    pub object_path: String,
+    pub upload_id: String,
+    pub parts: Vec<CompletedUploadPart>,
+    pub content_length: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbortMultipartUploadRequest {
+    pub object_path: String,
+    pub upload_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

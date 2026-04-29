@@ -14,4 +14,7 @@ pub enum CacheClientError {
 
     #[error("http request failed: {0}")]
     Request(#[from] reqwest::Error),
+
+    #[error("client upload failed: {message}")]
+    ClientUpload { message: String },
 }

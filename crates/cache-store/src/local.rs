@@ -16,9 +16,27 @@ use crate::blob::{BlobBytes, BlobMetadata};
 pub type UploadReader = Pin<Box<dyn AsyncRead + Send>>;
 
 #[derive(Debug, Clone)]
-pub struct PresignedPutUrl {
+pub struct MultipartUpload {
+    pub upload_id: String,
+    pub part_size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PresignedUploadPartUrl {
     pub url: String,
     pub expires_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedMultipartUploadPart {
+    pub part_number: i32,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedMultipartUpload {
+    pub content_length: u64,
+    pub e_tag: Option<String>,
 }
 
 #[async_trait]
@@ -33,12 +51,37 @@ pub trait CacheStorage: Send + Sync + 'static {
     async fn put_bytes(&self, object_path: &str, bytes: BlobBytes) -> Result<()>;
     async fn put_stream(&self, object_path: &str, reader: UploadReader) -> Result<u64>;
 
-    async fn presigned_put_url(
+    async fn create_multipart_upload(&self, _object_path: &str) -> Result<Option<MultipartUpload>> {
+        Ok(None)
+    }
+
+    async fn presign_multipart_upload_part(
         &self,
         _object_path: &str,
+        _upload_id: &str,
+        _part_number: i32,
+        _content_length: u64,
         _expires_in: Duration,
-    ) -> Result<Option<PresignedPutUrl>> {
+    ) -> Result<Option<PresignedUploadPartUrl>> {
         Ok(None)
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        _object_path: &str,
+        _upload_id: &str,
+        _parts: Vec<CompletedMultipartUploadPart>,
+        _content_length: u64,
+    ) -> Result<CompletedMultipartUpload> {
+        Err(anyhow!(
+            "storage backend does not support multipart uploads"
+        ))
+    }
+
+    async fn abort_multipart_upload(&self, _object_path: &str, _upload_id: &str) -> Result<()> {
+        Err(anyhow!(
+            "storage backend does not support multipart uploads"
+        ))
     }
 
     async fn delete(&self, object_path: &str) -> Result<()>;

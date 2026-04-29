@@ -12,11 +12,13 @@ use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 use cache_api::{
-    AccessTokenInfo, BeginBuildRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
+    AbortMultipartUploadRequest, AccessTokenInfo, BeginBuildRequest,
+    CompleteMultipartUploadRequest, CreateAccessTokenRequest, CreateAccessTokenResponse,
     CreatePinRequest, DeleteProjectOidcIdentityRequest, FinalizeBuildRequest,
-    GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest, PinInfo, ProjectInfo,
-    ProjectOidcIdentityInfo, ProjectRetentionPolicyInfo, ProjectRetentionRuleInfo,
-    ProjectSigningKeyInfo, ProjectSigningKeyResponse, RegisterPathsRequest, RunGcRequest,
+    GenerateProjectSigningKeyRequest, ImportProjectSigningKeyRequest, PinInfo,
+    PresignMultipartUploadPartRequest, ProjectInfo, ProjectOidcIdentityInfo,
+    ProjectRetentionPolicyInfo, ProjectRetentionRuleInfo, ProjectSigningKeyInfo,
+    ProjectSigningKeyResponse, RegisterPathsRequest, RunGcRequest,
     UpsertProjectOidcIdentityRequest, UpsertProjectRequest, UpsertProjectRetentionPolicyRequest,
     UpsertUpstreamRequest, UpstreamInfo,
 };
@@ -121,6 +123,102 @@ pub async fn upload_object(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::error!(?error, "upload_object failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn presign_multipart_upload_part(
+    Path((build_id, store_path_hash, part_number)): Path<(String, String, i32)>,
+    State(state): State<WriteAppState>,
+    headers: HeaderMap,
+    Json(request): Json<PresignMultipartUploadPartRequest>,
+) -> Response {
+    let build_id = match Uuid::parse_str(&build_id) {
+        Ok(build_id) => build_id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(response) = require_build_access(&state, &headers, build_id).await {
+        return response;
+    }
+
+    let Ok(store_path_hash) = StorePathHash::from_hash(&store_path_hash) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    match state
+        .ingest_service
+        .presign_multipart_upload_part(build_id, &store_path_hash, part_number, request)
+        .await
+    {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => {
+            tracing::error!(?error, "presign_multipart_upload_part failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn complete_multipart_upload(
+    Path((build_id, store_path_hash)): Path<(String, String)>,
+    State(state): State<WriteAppState>,
+    headers: HeaderMap,
+    Json(request): Json<CompleteMultipartUploadRequest>,
+) -> Response {
+    let build_id = match Uuid::parse_str(&build_id) {
+        Ok(build_id) => build_id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(response) = require_build_access(&state, &headers, build_id).await {
+        return response;
+    }
+
+    let Ok(store_path_hash) = StorePathHash::from_hash(&store_path_hash) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    match state
+        .ingest_service
+        .complete_multipart_upload(build_id, &store_path_hash, request)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "complete_multipart_upload failed");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
+}
+
+pub async fn abort_multipart_upload(
+    Path((build_id, store_path_hash)): Path<(String, String)>,
+    State(state): State<WriteAppState>,
+    headers: HeaderMap,
+    Json(request): Json<AbortMultipartUploadRequest>,
+) -> Response {
+    let build_id = match Uuid::parse_str(&build_id) {
+        Ok(build_id) => build_id,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
+    if let Err(response) = require_build_access(&state, &headers, build_id).await {
+        return response;
+    }
+
+    let Ok(store_path_hash) = StorePathHash::from_hash(&store_path_hash) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+
+    match state
+        .ingest_service
+        .abort_multipart_upload(build_id, &store_path_hash, request)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            tracing::error!(?error, "abort_multipart_upload failed");
             StatusCode::BAD_REQUEST.into_response()
         }
     }
