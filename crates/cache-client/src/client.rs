@@ -824,23 +824,30 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, Clone)]
+    struct MultipartPresignRequestRecord {
+        build_id: String,
+        store_path_hash: String,
+        part_number: i32,
+        request: cache_api::PresignMultipartUploadPartRequest,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct UploadedPartRecord {
+        part_number: i32,
+        body: Vec<u8>,
+    }
+
+    type SharedRecords<T> = Arc<Mutex<Vec<T>>>;
+
     #[derive(Default, Clone)]
     struct TestState {
         auth_headers: Arc<Mutex<Vec<String>>>,
         uploaded_paths: Arc<Mutex<Vec<(String, String, String)>>>,
         uploaded_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
-        multipart_presign_requests: Arc<
-            Mutex<
-                Vec<(
-                    String,
-                    String,
-                    i32,
-                    cache_api::PresignMultipartUploadPartRequest,
-                )>,
-            >,
-        >,
-        uploaded_parts: Arc<Mutex<Vec<(i32, Vec<u8>)>>>,
-        completed_multipart_uploads: Arc<Mutex<Vec<cache_api::CompleteMultipartUploadRequest>>>,
+        multipart_presign_requests: SharedRecords<MultipartPresignRequestRecord>,
+        uploaded_parts: SharedRecords<UploadedPartRecord>,
+        completed_multipart_uploads: SharedRecords<cache_api::CompleteMultipartUploadRequest>,
         pin_queries: Arc<Mutex<Vec<Option<String>>>>,
     }
 
@@ -943,12 +950,16 @@ mod tests {
                 .to_owned(),
         );
 
-        state.multipart_presign_requests.lock().unwrap().push((
-            build_id,
-            store_path_hash,
-            part_number,
-            request.clone(),
-        ));
+        state
+            .multipart_presign_requests
+            .lock()
+            .unwrap()
+            .push(MultipartPresignRequestRecord {
+                build_id,
+                store_path_hash,
+                part_number,
+                request: request.clone(),
+            });
 
         let host = headers
             .get(header::HOST)
@@ -972,7 +983,10 @@ mod tests {
             .uploaded_parts
             .lock()
             .unwrap()
-            .push((part_number, body.to_vec()));
+            .push(UploadedPartRecord {
+                part_number,
+                body: body.to_vec(),
+            });
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1356,27 +1370,36 @@ mod tests {
         assert_eq!(
             state.uploaded_parts.lock().unwrap().as_slice(),
             &[
-                (1, b"hello".to_vec()),
-                (2, b"-worl".to_vec()),
-                (3, b"d!".to_vec()),
+                UploadedPartRecord {
+                    part_number: 1,
+                    body: b"hello".to_vec(),
+                },
+                UploadedPartRecord {
+                    part_number: 2,
+                    body: b"-worl".to_vec(),
+                },
+                UploadedPartRecord {
+                    part_number: 3,
+                    body: b"d!".to_vec(),
+                },
             ]
         );
 
         let presign_requests = state.multipart_presign_requests.lock().unwrap();
         assert_eq!(presign_requests.len(), 3);
 
-        assert_eq!(presign_requests[0].0, BUILD_ID);
-        assert_eq!(presign_requests[0].1, hash.as_str());
-        assert_eq!(presign_requests[0].2, 1);
-        assert_eq!(presign_requests[0].3.object_path, path.url());
-        assert_eq!(presign_requests[0].3.upload_id, "upload-123");
-        assert_eq!(presign_requests[0].3.content_length, 5);
+        assert_eq!(presign_requests[0].build_id, BUILD_ID);
+        assert_eq!(presign_requests[0].store_path_hash, hash.as_str());
+        assert_eq!(presign_requests[0].part_number, 1);
+        assert_eq!(presign_requests[0].request.object_path, path.url());
+        assert_eq!(presign_requests[0].request.upload_id, "upload-123");
+        assert_eq!(presign_requests[0].request.content_length, 5);
 
-        assert_eq!(presign_requests[1].2, 2);
-        assert_eq!(presign_requests[1].3.content_length, 5);
+        assert_eq!(presign_requests[1].part_number, 2);
+        assert_eq!(presign_requests[1].request.content_length, 5);
 
-        assert_eq!(presign_requests[2].2, 3);
-        assert_eq!(presign_requests[2].3.content_length, 2);
+        assert_eq!(presign_requests[2].part_number, 3);
+        assert_eq!(presign_requests[2].request.content_length, 2);
 
         drop(presign_requests);
 
