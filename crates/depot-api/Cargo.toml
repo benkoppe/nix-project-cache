@@ -1,0 +1,9 @@
+[package]
+name = "depot-api"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+depot-core = { path = "../depot-core" }
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }

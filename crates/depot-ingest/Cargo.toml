@@ -1,0 +1,22 @@
+[package]
+name = "depot-ingest"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+depot-api = { path = "../depot-api" }
+depot-core = { path = "../depot-core" }
+depot-db = { path = "../depot-db" }
+depot-store = { path = "../depot-store" }
+anyhow.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+depot-test-utils = { path = "../depot-test-utils" }
+depot-read = { path = "../depot-read" }
+async-trait.workspace = true
+time.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

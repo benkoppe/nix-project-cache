@@ -40,7 +40,7 @@ jobs:
           purge-primary-key: never
 
       - name: Run filesystem e2e
-        run: nix build .#checks.x86_64-linux.e2e-cache-substituter-fs -L
+        run: nix build .#checks.x86_64-linux.e2e-depot-substituter-fs -L
 
       - name: Run S3 e2e
-        run: nix build .#checks.x86_64-linux.e2e-cache-substituter-s3 -L
+        run: nix build .#checks.x86_64-linux.e2e-depot-substituter-s3 -L

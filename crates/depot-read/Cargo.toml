@@ -1,0 +1,22 @@
+[package]
+name = "depot-read"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+depot-core = { path = "../depot-core" }
+depot-store = { path = "../depot-store" }
+depot-db = { path = "../depot-db" }
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+depot-test-utils = { path = "../depot-test-utils" }
+http-body-util.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+bytes.workspace = true
+uuid.workspace = true

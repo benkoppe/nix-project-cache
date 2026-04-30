@@ -1,22 +1,22 @@
 [workspace]
 resolver = "3"
 members = [
-  "crates/cache-api",
-  "crates/cache-app",
-  "crates/cache-auth",
-  "crates/cache-client",
-  "crates/cache-core",
-  "crates/cache-ctl",
-  "crates/cache-db",
-  "crates/cache-ingest",
-  "crates/cache-push",
-  "crates/cache-read",
-  "crates/cache-store",
-  "crates/cache-test-utils",
-  "crates/cache-write",
+  "crates/depot-api",
+  "crates/depot-server",
+  "crates/depot-auth",
+  "crates/depot-client",
+  "crates/depot-core",
+  "crates/depot-ctl",
+  "crates/depot-db",
+  "crates/depot-ingest",
+  "crates/depot-push",
+  "crates/depot-read",
+  "crates/depot-store",
+  "crates/depot-test-utils",
+  "crates/depot-write",
 ]
 package.version = "0.0.1"
-metadata.crane.name = "nix-project-cache"
+metadata.crane.name = "repo-depot"
 
 [workspace.dependencies]
 aws-credential-types = "1"
